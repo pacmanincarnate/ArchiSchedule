@@ -1,0 +1,2230 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArchiSchedule</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom Scrollbar for sleek UI */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        .dark ::-webkit-scrollbar-thumb {
+            background: #475569;
+        }
+
+        .dark ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef, useCallback } = React;
+
+        // --- Icon Wrapper ---
+        const Icon = ({ name, className, ...rest }) => {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (ref.current) {
+                    ref.current.innerHTML = `<i data-lucide="${name}" class="${className || ''}"></i>`;
+                    window.lucide.createIcons({ root: ref.current });
+                }
+            }, [name, className]);
+            return <span ref={ref} {...rest} style={{ display: 'contents' }} />;
+        };
+
+        const ChevronRight = (p) => <Icon name="chevron-right" {...p} />;
+        const ChevronDown = (p) => <Icon name="chevron-down" {...p} />;
+        const Plus = (p) => <Icon name="plus" {...p} />;
+        const Trash2 = (p) => <Icon name="trash-2" {...p} />;
+        const Filter = (p) => <Icon name="filter" {...p} />;
+        const Flag = (p) => <Icon name="flag" {...p} />;
+        const Briefcase = (p) => <Icon name="briefcase" {...p} />;
+        const AlertCircle = (p) => <Icon name="alert-circle" {...p} />;
+        const CalendarDays = (p) => <Icon name="calendar-days" {...p} />;
+        const BriefcaseBusiness = (p) => <Icon name="briefcase-business" {...p} />;
+        const Moon = (p) => <Icon name="moon" {...p} />;
+        const Sun = (p) => <Icon name="sun" {...p} />;
+        const Download = (p) => <Icon name="download" {...p} />;
+        const Copy = (p) => <Icon name="copy" {...p} />;
+        const Folder = (p) => <Icon name="folder" {...p} />;
+        const FileIcon = (p) => <Icon name="file" {...p} />;
+        const X = (p) => <Icon name="x" {...p} />;
+        const FileText = (p) => <Icon name="file-text" {...p} />;
+        const FileSpreadsheet = (p) => <Icon name="file-spreadsheet" {...p} />;
+        const Edit2 = (p) => <Icon name="edit-2" {...p} />;
+        const FilePlus = (p) => <Icon name="file-plus" {...p} />;
+        const Upload = (p) => <Icon name="upload" {...p} />;
+        const Calendar = (p) => <Icon name="calendar" {...p} />;
+        const Presentation = (p) => <Icon name="presentation" {...p} />;
+        const LayoutDashboard = (p) => <Icon name="layout-dashboard" {...p} />;
+        const Loader2 = (p) => <Icon name="loader-2" {...p} />;
+        const ListTree = (p) => <Icon name="list-tree" {...p} />;
+
+        // --- Date Utilities ---
+        const parseDate = (str) => new Date(str + 'T12:00:00Z');
+        const isValidDateStr = (str) => { if (!str) return false; return !isNaN(parseDate(str).getTime()); };
+
+        const formatShortDate = (dateStr) => {
+            if (!isValidDateStr(dateStr)) return '';
+            const d = parseDate(dateStr);
+            return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCFullYear()).slice(2)}`;
+        };
+
+        const formatDayMonth = (dateStr) => {
+            if (!isValidDateStr(dateStr)) return '';
+            const d = parseDate(dateStr);
+            return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`;
+        };
+
+        const HOLIDAYS = [
+            '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07', '2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25',
+            '2027-01-01', '2027-01-18', '2027-02-15', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-10-11', '2027-11-11', '2027-11-25', '2027-12-24'
+        ];
+
+        const addDays = (dateStr, days) => {
+            const d = parseDate(dateStr);
+            d.setUTCDate(d.getUTCDate() + parseInt(days, 10));
+            return d.toISOString().split('T')[0];
+        };
+
+        const diffDays = (startStr, endStr) => {
+            const start = parseDate(startStr);
+            const end = parseDate(endStr);
+            return Math.round((end - start) / (1000 * 60 * 60 * 24));
+        };
+
+        const isWeekend = (date) => date.getUTCDay() === 0 || date.getUTCDay() === 6;
+        const isHoliday = (dateStr) => HOLIDAYS.includes(dateStr);
+        const isNonWorkingDay = (dateStr, type) => {
+            if (type === 'Calendar') return false;
+            return isWeekend(parseDate(dateStr)) || isHoliday(dateStr);
+        };
+
+        const calculateEndDate = (startStr, durationInDays, type) => {
+            let dur = Math.max(1, durationInDays);
+            if (type === 'Calendar') return addDays(startStr, dur - 1);
+            let current = parseDate(startStr);
+            let added = 0;
+            while (added < dur) {
+                const dStr = current.toISOString().split('T')[0];
+                if (!isWeekend(current) && !isHoliday(dStr)) added++;
+                if (added < dur) current.setUTCDate(current.getUTCDate() + 1);
+            }
+            return current.toISOString().split('T')[0];
+        };
+
+        const getDurationBetweenDates = (startStr, endStr, type) => {
+            let current = parseDate(startStr);
+            const end = parseDate(endStr);
+            if (current > end) return 1;
+            let days = 0;
+            while (current <= end) {
+                const dStr = current.toISOString().split('T')[0];
+                if (type === 'Calendar' || (!isWeekend(current) && !isHoliday(dStr))) days++;
+                current.setUTCDate(current.getUTCDate() + 1);
+            }
+            return Math.max(1, days);
+        };
+
+        const recalculateSchedule = (currentTasks, type) => {
+            let updated = JSON.parse(JSON.stringify(currentTasks));
+            let changed = true;
+            let iterations = 0;
+            while (changed && iterations < 100) {
+                changed = false;
+                iterations++;
+                for (let i = 0; i < updated.length; i++) {
+                    let task = updated[i];
+                    if (task.deps && task.deps.length > 0) {
+                        let maxEndStr = '1970-01-01';
+                        task.deps.forEach(depId => {
+                            const depTask = updated.find(t => t.id === depId);
+                            if (depTask) {
+                                let depEnd = calculateEndDate(depTask.start, depTask.duration, type);
+                                depEnd = addDays(depEnd, 1);
+                                if (type === 'Business') {
+                                    while (isNonWorkingDay(depEnd, type)) depEnd = addDays(depEnd, 1);
+                                }
+                                if (depEnd > maxEndStr) maxEndStr = depEnd;
+                            }
+                        });
+                        if (task.start !== maxEndStr) {
+                            task.start = maxEndStr;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            return updated;
+        };
+
+        const getEarliestAndLatestDates = (tasks, type) => {
+            if (tasks.length === 0) return { start: parseDate(new Date().toISOString().split('T')[0]), end: parseDate(addDays(new Date().toISOString().split('T')[0], 30)) };
+            let earliestStr = tasks[0].start;
+            let latestStr = calculateEndDate(tasks[0].start, tasks[0].duration, type);
+            tasks.forEach(t => {
+                if (t.start < earliestStr) earliestStr = t.start;
+                const e = calculateEndDate(t.start, t.duration, type);
+                if (e > latestStr) latestStr = e;
+            });
+            const earliest = parseDate(earliestStr);
+            const latest = parseDate(latestStr);
+            earliest.setUTCDate(earliest.getUTCDate() - 7);
+            latest.setUTCDate(latest.getUTCDate() + 21);
+            return { start: earliest, end: latest };
+        };
+
+        const generateICS = (tasks) => {
+            const milestones = tasks.filter(t => t.milestone > 0);
+            let ics = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ArchiSchedule//EN\n';
+            milestones.forEach(m => {
+                const start = m.start.replace(/-/g, '') + 'T090000Z';
+                const end = m.start.replace(/-/g, '') + 'T100000Z';
+                ics += 'BEGIN:VEVENT\n';
+                ics += `DTSTART:${start}\n`;
+                ics += `DTEND:${end}\n`;
+                ics += `SUMMARY:Milestone: ${m.name}\n`;
+                ics += `DESCRIPTION:Phase: ${m.phase}\\nParty: ${m.party}\n`;
+                ics += 'END:VEVENT\n';
+            });
+            ics += 'END:VCALENDAR';
+            return ics;
+        };
+
+        const loadScript = (src) => {
+            return new Promise((resolve, reject) => {
+                if (document.querySelector(`script[src="${src}"]`)) return resolve();
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        };
+
+        const INITIAL_PHASES = ['Pre-Design', 'Schematic Design', 'Design Development', 'Construction Documents', 'Permitting', 'Bidding', 'Construction Admin'];
+        const PARTIES = ['Architect', 'Client', 'Structural', 'MEP', 'Civil', 'Landscape', 'Municipality', 'Contractor'];
+        const INITIAL_PHASE_COLORS = { 'Pre-Design': '#64748b', 'Schematic Design': '#3b82f6', 'Design Development': '#6366f1', 'Construction Documents': '#7c3aed', 'Permitting': '#f97316', 'Bidding': '#f59e0b', 'Construction Admin': '#059669' };
+        const INITIAL_TASKS = [
+            { id: '1', name: 'Project Kickoff', phase: 'Pre-Design', party: 'All', start: '2026-03-02', duration: 1, milestone: 1, deps: [] },
+            { id: '2', name: 'Site Survey & Scanning', phase: 'Pre-Design', party: 'Civil', start: '2026-03-03', duration: 10, milestone: 0, deps: ['1'] },
+            { id: '3', name: 'Zoning Analysis', phase: 'Pre-Design', party: 'Architect', start: '2026-03-03', duration: 5, milestone: 0, deps: ['1'] },
+            { id: '4', name: 'Concept Sketches', phase: 'Schematic Design', party: 'Architect', start: '2026-03-17', duration: 14, milestone: 0, deps: ['2', '3'] },
+            { id: '5', name: 'Owner Concept Review', phase: 'Schematic Design', party: 'Client', start: '2026-04-06', duration: 1, milestone: 2, deps: ['4'] },
+        ];
+
+        function App() {
+            const [viewMode, setViewMode] = useState(() => localStorage.getItem('archiViewMode') || 'Business');
+            const durationType = viewMode === 'Days' ? 'Calendar' : 'Business';
+
+            const [projects, setProjects] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('archiScheduleData');
+                    if (saved) return JSON.parse(saved);
+                } catch (e) { console.error("Load failed", e); }
+                return [{
+                    id: 'p1', name: 'Sample Architecture Project', clientName: '',
+                    versions: [{ id: 'v1', name: 'Base Schedule', tasks: INITIAL_TASKS, phases: INITIAL_PHASES, phaseColors: INITIAL_PHASE_COLORS }]
+                }];
+            });
+            const [activeProjectId, setActiveProjectId] = useState(() => localStorage.getItem('archiActiveP') || 'p1');
+            const [activeVersionId, setActiveVersionId] = useState(() => localStorage.getItem('archiActiveV') || 'v1');
+
+            const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('archiDarkMode') === 'true');
+            const [layoutView, setLayoutView] = useState(() => localStorage.getItem('archiLayout') || 'Gantt');
+            const [showTimelineTasks, setShowTimelineTasks] = useState(() => localStorage.getItem('archiShowTasks') === 'true');
+
+            const [showExportModal, setShowExportModal] = useState(false);
+            const [isExporting, setIsExporting] = useState(false);
+            const [renameModal, setRenameModal] = useState(null);
+            const [showShiftModal, setShowShiftModal] = useState(false);
+            const [shiftTarget, setShiftTarget] = useState('All');
+            const [shiftMode, setShiftMode] = useState('days'); // 'days' or 'date'
+            const [shiftDays, setShiftDays] = useState(0);
+            const [shiftDate, setShiftDate] = useState('');
+
+            const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
+            const activeVersion = activeProject.versions.find(v => v.id === activeVersionId) || activeProject.versions[0];
+            const tasks = activeVersion.tasks || [];
+            const phases = activeVersion.phases || [];
+            const phaseColors = activeVersion.phaseColors || {};
+
+            useEffect(() => { localStorage.setItem('archiScheduleData', JSON.stringify(projects)); }, [projects]);
+            useEffect(() => { localStorage.setItem('archiActiveP', activeProjectId); }, [activeProjectId]);
+            useEffect(() => { localStorage.setItem('archiActiveV', activeVersionId); }, [activeVersionId]);
+            useEffect(() => { localStorage.setItem('archiDarkMode', isDarkMode); }, [isDarkMode]);
+            useEffect(() => { localStorage.setItem('archiLayout', layoutView); }, [layoutView]);
+            useEffect(() => { localStorage.setItem('archiViewMode', viewMode); }, [viewMode]);
+            useEffect(() => { localStorage.setItem('archiShowTasks', showTimelineTasks); }, [showTimelineTasks]);
+
+            const updateVersion = useCallback((taskUpdater, phaseUpdater, colorUpdater, typeOverride = null) => {
+                setProjects(prev => prev.map(p => {
+                    if (p.id !== activeProjectId) return p;
+                    return {
+                        ...p,
+                        versions: p.versions.map(v => {
+                            if (v.id !== activeVersionId) return v;
+                            const newTasks = taskUpdater ? taskUpdater(v.tasks) : v.tasks;
+                            return {
+                                ...v,
+                                tasks: taskUpdater ? recalculateSchedule(newTasks, typeOverride || durationType) : v.tasks,
+                                phases: phaseUpdater ? phaseUpdater(v.phases) : v.phases,
+                                phaseColors: colorUpdater ? colorUpdater(v.phaseColors) : v.phaseColors
+                            };
+                        })
+                    };
+                }));
+            }, [activeProjectId, activeVersionId, durationType]);
+
+            const [dayWidth, setDayWidth] = useState(24);
+            const [panelWidth, setPanelWidth] = useState(650);
+            const [filterPhase, setFilterPhase] = useState('All');
+            const [filterParty, setFilterParty] = useState('All');
+            const [newPhaseName, setNewPhaseName] = useState('');
+
+            const durationUnit = viewMode === 'Weeks' ? 'Weeks' : 'Days';
+            const fileInputRef = useRef(null);
+
+            const [expandedPhases, setExpandedPhases] = useState(INITIAL_PHASES.reduce((acc, p) => ({ ...acc, [p]: true }), {}));
+            const [colWidths, setColWidths] = useState({ name: 220, party: 100, duration: 80, start: 120, end: 110 });
+
+            // Drag & Drop / Resize States
+            const [resizingCol, setResizingCol] = useState(null);
+            const [resizingPanel, setResizingPanel] = useState(false);
+            const [resizingTimeline, setResizingTimeline] = useState(null);
+            const [dragTaskState, setDragTaskState] = useState(null);
+            const [dragPhaseState, setDragPhaseState] = useState(null);
+            const [linkingState, setLinkingState] = useState(null);
+            const [draggedItem, setDraggedItem] = useState(null);
+            const [dragOverTarget, setDragOverTarget] = useState(null);
+
+            const timelineContainerRef = useRef(null);
+            const exportTargetRef = useRef(null);
+
+            useEffect(() => {
+                if (!resizingCol && !resizingTimeline && !resizingPanel && !dragTaskState && !dragPhaseState && !linkingState) return;
+
+                const handleMouseMove = (e) => {
+                    if (resizingCol) {
+                        setColWidths(prev => ({ ...prev, [resizingCol.col]: Math.max(50, resizingCol.startWidth + (e.clientX - resizingCol.startX)) }));
+                    } else if (resizingPanel) {
+                        setPanelWidth(Math.max(300, e.clientX));
+                    } else if (resizingTimeline) {
+                        const newWeekWidth = Math.max(35, (resizingTimeline.startDayWidth * 7) + (e.clientX - resizingTimeline.startX));
+                        setDayWidth(newWeekWidth / 7);
+                    } else if (dragTaskState) {
+                        const deltaCalendarDays = Math.round((e.clientX - dragTaskState.startX) / dayWidth);
+                        if (dragTaskState.type === 'center') {
+                            const newStartStr = addDays(dragTaskState.originalStartStr, deltaCalendarDays);
+                            if (newStartStr !== dragTaskState.currentStartStr && isValidDateStr(newStartStr)) {
+                                setDragTaskState(prev => ({ ...prev, currentStartStr: newStartStr }));
+                                handleTaskChange(dragTaskState.taskId, 'start', newStartStr);
+                            }
+                        } else if (dragTaskState.type === 'right') {
+                            const newVisualEndStr = addDays(dragTaskState.originalEndStr, deltaCalendarDays);
+                            const newDur = getDurationBetweenDates(dragTaskState.originalStartStr, newVisualEndStr, durationType);
+                            if (newDur !== dragTaskState.currentDuration) {
+                                setDragTaskState(prev => ({ ...prev, currentDuration: newDur }));
+                                handleTaskChange(dragTaskState.taskId, 'duration', newDur);
+                            }
+                        } else if (dragTaskState.type === 'left') {
+                            const newStartStr = addDays(dragTaskState.originalStartStr, deltaCalendarDays);
+                            if (isValidDateStr(newStartStr)) {
+                                const newDur = getDurationBetweenDates(newStartStr, dragTaskState.originalEndStr, durationType);
+                                if (newStartStr !== dragTaskState.currentStartStr || newDur !== dragTaskState.currentDuration) {
+                                    setDragTaskState(prev => ({ ...prev, currentStartStr: newStartStr, currentDuration: newDur }));
+                                    updateVersion(tList => tList.map(t => t.id === dragTaskState.taskId ? { ...t, start: newStartStr, duration: newDur, deps: [] } : t), null, null, durationType);
+                                }
+                            }
+                        }
+                    } else if (dragPhaseState) {
+                        const deltaCalendarDays = Math.round((e.clientX - dragPhaseState.startX) / dayWidth);
+                        if (deltaCalendarDays !== dragPhaseState.currentDelta) {
+                            setDragPhaseState(prev => ({ ...prev, currentDelta: deltaCalendarDays }));
+                        }
+                    } else if (linkingState) {
+                        const container = timelineContainerRef.current;
+                        if (container) {
+                            const rect = container.getBoundingClientRect();
+                            setLinkingState(prev => ({ ...prev, currentX: e.clientX - rect.left + container.scrollLeft, currentY: (e.clientY - rect.top + container.scrollTop) - 64 }));
+                        }
+                    }
+                };
+
+                const handleMouseUp = (e) => {
+                    if (linkingState) {
+                        const targetTaskBar = document.elementFromPoint(e.clientX, e.clientY)?.closest('.task-bar-hitbox');
+                        const targetId = targetTaskBar?.getAttribute('data-taskid');
+                        if (targetId && targetId !== linkingState.sourceId) linkTasks(linkingState.sourceId, targetId);
+                    } else if (dragPhaseState) {
+                        const daysToShift = dragPhaseState.currentDelta;
+                        if (daysToShift !== 0) {
+                            const shiftTarget = dragPhaseState.phase;
+
+                            // Check for links to earlier phases
+                            let shouldBreakLinks = false;
+                            const hasExternalLinks = tasks.some(t => {
+                                if (t.phase === shiftTarget) {
+                                    return t.deps.some(depId => {
+                                        const depTask = tasks.find(dt => dt.id === depId);
+                                        return depTask && depTask.phase !== shiftTarget;
+                                    });
+                                }
+                                return false;
+                            });
+
+                            if (hasExternalLinks) {
+                                shouldBreakLinks = window.confirm(`There are tasks in "${shiftTarget}" that are linked to tasks in other phases. Do you want to break these links before shifting?\n\nClick OK to break links and shift independently.\nClick Cancel to keep links (the shift may be overridden by existing dependencies).`);
+                            }
+
+                            updateVersion(prevTasks => {
+                                let updated = JSON.parse(JSON.stringify(prevTasks));
+
+                                if (shouldBreakLinks) {
+                                    updated.forEach(t => {
+                                        if (t.phase === shiftTarget) {
+                                            t.deps = t.deps.filter(depId => {
+                                                const depTask = updated.find(dt => dt.id === depId);
+                                                return depTask && depTask.phase === shiftTarget;
+                                            });
+                                        }
+                                    });
+                                }
+
+                                updated.forEach(t => {
+                                    if (t.phase === shiftTarget) {
+                                        t.start = addDays(t.start, daysToShift);
+                                    }
+                                });
+                                return updated;
+                            }, null, null, durationType);
+                        }
+                    }
+                    setResizingCol(null); setResizingTimeline(null); setResizingPanel(false); setDragTaskState(null); setDragPhaseState(null); setLinkingState(null);
+                };
+
+                window.addEventListener('mousemove', handleMouseMove);
+                window.addEventListener('mouseup', handleMouseUp);
+                return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
+            }, [resizingCol, resizingTimeline, resizingPanel, dragTaskState, dragPhaseState, linkingState, dayWidth, durationType, updateVersion, tasks]);
+
+            const handleItemDrop = (e, targetId, targetType, targetPhase) => {
+                e.stopPropagation();
+                if (!draggedItem) return;
+
+                if (draggedItem.type === 'task' && targetType === 'task') {
+                    if (draggedItem.id === targetId) return;
+                    updateVersion(prev => {
+                        const result = [...prev];
+                        const srcIdx = result.findIndex(t => t.id === draggedItem.id);
+                        if (srcIdx < 0) return prev;
+                        const [moved] = result.splice(srcIdx, 1);
+                        moved.phase = targetPhase;
+                        const tgtIdx = result.findIndex(t => t.id === targetId);
+                        result.splice(tgtIdx >= 0 ? tgtIdx : result.length, 0, moved);
+                        return result;
+                    }, null, null, durationType);
+                } else if (draggedItem.type === 'phase' && targetType === 'phase') {
+                    if (draggedItem.id === targetId) return;
+                    updateVersion(null, prevPhases => {
+                        const result = [...prevPhases];
+                        const srcIdx = result.indexOf(draggedItem.id);
+                        const tgtIdx = result.indexOf(targetId);
+                        if (srcIdx < 0 || tgtIdx < 0) return prevPhases;
+                        result.splice(srcIdx, 1);
+                        result.splice(tgtIdx, 0, draggedItem.id);
+                        return result;
+                    }, null, durationType);
+                } else if (draggedItem.type === 'task' && targetType === 'phase') {
+                    updateVersion(prev => {
+                        const result = [...prev];
+                        const srcIdx = result.findIndex(t => t.id === draggedItem.id);
+                        if (srcIdx < 0) return prev;
+                        const [moved] = result.splice(srcIdx, 1);
+                        moved.phase = targetPhase;
+                        const lastIdx = result.findLastIndex(t => t.phase === targetPhase);
+                        if (lastIdx >= 0) result.splice(lastIdx + 1, 0, moved);
+                        else result.push(moved);
+                        return result;
+                    }, null, null, durationType);
+                }
+                setDraggedItem(null);
+                setDragOverTarget(null);
+            };
+
+            const handleViewModeChange = (newMode) => {
+                const oldType = durationType;
+                const newType = newMode === 'Days' ? 'Calendar' : 'Business';
+                if (oldType !== newType) {
+                    updateVersion(prev => prev.map(t => ({ ...t, duration: getDurationBetweenDates(t.start, calculateEndDate(t.start, t.duration, oldType), newType) })), null, null, newType);
+                }
+                setViewMode(newMode);
+            };
+
+            const handleTaskChange = useCallback((id, field, value) => {
+                if (field === 'start' && (!value || !isValidDateStr(value))) return;
+                updateVersion(prev => prev.map(t => {
+                    if (t.id === id) {
+                        let updated = { ...t, [field]: value };
+                        if (field === 'duration' && value < 1) updated.duration = 1;
+                        if (field === 'start') updated.deps = [];
+                        return updated;
+                    }
+                    return t;
+                }), null, null, durationType);
+            }, [updateVersion, durationType]);
+
+            const addTask = useCallback((phase) => {
+                updateVersion(prev => [
+                    ...prev,
+                    { id: Math.random().toString(36).substr(2, 9), name: 'New Task', phase, party: 'Architect', start: prev.length > 0 ? addDays(calculateEndDate(prev[prev.length - 1].start, prev[prev.length - 1].duration, durationType), 1) : new Date().toISOString().split('T')[0], duration: durationUnit === 'Weeks' ? (durationType === 'Business' ? 5 : 7) : 5, milestone: 0, deps: prev.length > 0 ? [prev[prev.length - 1].id] : [] }
+                ], null, null, durationType);
+            }, [durationUnit, durationType, updateVersion]);
+
+            const deleteTask = useCallback((id) => {
+                updateVersion(prev => prev.filter(t => t.id !== id).map(t => ({ ...t, deps: t.deps.filter(depId => depId !== id) })), null, null, durationType);
+            }, [updateVersion, durationType]);
+
+            const handleDeletePhase = (phase) => {
+                const phaseTasks = tasks.filter(t => t.phase === phase);
+                if (phaseTasks.length > 0 && !window.confirm(`Delete "${phase}" and its ${phaseTasks.length} tasks?`)) return;
+                const tasksToDelete = new Set(phaseTasks.map(t => t.id));
+                updateVersion(
+                    prev => prev.filter(t => !tasksToDelete.has(t.id)).map(t => ({ ...t, deps: t.deps.filter(d => !tasksToDelete.has(d)) })),
+                    prev => prev.filter(p => p !== phase),
+                    prev => { const c = { ...prev }; delete c[phase]; return c; },
+                    durationType
+                );
+            };
+
+            const cycleMilestone = useCallback((id) => {
+                updateVersion(prev => prev.map(t => {
+                    if (t.id === id) {
+                        const nextType = ((t.milestone || 0) + 1) % 3;
+                        return { ...t, milestone: nextType, duration: nextType > 0 ? 1 : Math.max(t.duration, 5) };
+                    }
+                    return t;
+                }), null, null, durationType);
+            }, [updateVersion, durationType]);
+
+            const linkTasks = useCallback((sourceId, targetId) => {
+                updateVersion(prev => {
+                    let target = prev.find(t => t.id === targetId);
+                    if (!target) return prev;
+                    if (target.deps.includes(sourceId)) return prev.map(t => t.id === targetId ? { ...t, deps: t.deps.filter(id => id !== sourceId) } : t);
+                    return prev.map(t => t.id === targetId ? { ...t, deps: [...new Set([...t.deps, sourceId])] } : t);
+                }, null, null, durationType);
+            }, [updateVersion, durationType]);
+
+            const addProject = () => {
+                const newId = Math.random().toString(36).substr(2, 9);
+                setProjects(prev => [...prev, { id: newId, name: 'New Project', clientName: '', versions: [{ id: 'v1', name: 'Base Schedule', tasks: [], phases: INITIAL_PHASES, phaseColors: INITIAL_PHASE_COLORS }] }]);
+                setActiveProjectId(newId);
+                setActiveVersionId('v1');
+                setRenameModal({ type: 'project', id: newId, name: 'New Project', clientName: '' });
+            };
+
+            const duplicateVersion = () => {
+                const newId = Math.random().toString(36).substr(2, 9);
+                setProjects(prev => prev.map(p => p.id === activeProjectId ? { ...p, versions: [...p.versions, { ...activeVersion, id: newId, name: `${activeVersion.name} (Copy)` }] } : p));
+                setActiveVersionId(newId);
+            };
+
+            const addBlankVersion = () => {
+                const newId = Math.random().toString(36).substr(2, 9);
+                setProjects(prev => prev.map(p => p.id === activeProjectId ? { ...p, versions: [...p.versions, { id: newId, name: `New Schedule`, tasks: [], phases: INITIAL_PHASES, phaseColors: INITIAL_PHASE_COLORS }] } : p));
+                setActiveVersionId(newId);
+                setRenameModal({ type: 'version', id: newId, name: 'New Schedule' });
+            };
+
+            const handleRenameSubmit = (e) => {
+                e.preventDefault();
+                if (!renameModal) return;
+                if (renameModal.type === 'project') setProjects(prev => prev.map(p => p.id === renameModal.id ? { ...p, name: renameModal.name, clientName: renameModal.clientName } : p));
+                else setProjects(prev => prev.map(p => p.id === activeProjectId ? { ...p, versions: p.versions.map(v => v.id === renameModal.id ? { ...v, name: renameModal.name } : v) } : p));
+                setRenameModal(null);
+            };
+
+            const handleShiftSubmit = (e) => {
+                e.preventDefault();
+
+                let daysToShift = 0;
+
+                if (shiftMode === 'days') {
+                    daysToShift = parseInt(shiftDays, 10);
+                    if (isNaN(daysToShift) || daysToShift === 0) {
+                        setShowShiftModal(false);
+                        return;
+                    }
+                } else if (shiftMode === 'date') {
+                    if (!isValidDateStr(shiftDate)) {
+                        setShowShiftModal(false);
+                        return;
+                    }
+
+                    // Find earliest date in target
+                    let earliestStr = null;
+                    tasks.forEach(t => {
+                        if (shiftTarget === 'All' || t.phase === shiftTarget) {
+                            if (!earliestStr || t.start < earliestStr) earliestStr = t.start;
+                        }
+                    });
+
+                    if (!earliestStr) {
+                        setShowShiftModal(false);
+                        return;
+                    }
+
+                    daysToShift = diffDays(earliestStr, shiftDate);
+                    if (daysToShift === 0) {
+                        setShowShiftModal(false);
+                        return;
+                    }
+                }
+
+                // Check for links to earlier phases if shifting a specific phase
+                let shouldBreakLinks = false;
+                if (shiftTarget !== 'All') {
+                    const hasExternalLinks = tasks.some(t => {
+                        if (t.phase === shiftTarget) {
+                            return t.deps.some(depId => {
+                                const depTask = tasks.find(dt => dt.id === depId);
+                                return depTask && depTask.phase !== shiftTarget;
+                            });
+                        }
+                        return false;
+                    });
+
+                    if (hasExternalLinks) {
+                        shouldBreakLinks = window.confirm(`There are tasks in "${shiftTarget}" that are linked to tasks in other phases. Do you want to break these links before shifting?\n\nClick OK to break links and shift independently.\nClick Cancel to keep links (the shift may be overridden by existing dependencies).`);
+                    }
+                }
+
+                updateVersion(prevTasks => {
+                    let updated = JSON.parse(JSON.stringify(prevTasks));
+
+                    if (shouldBreakLinks && shiftTarget !== 'All') {
+                        updated.forEach(t => {
+                            if (t.phase === shiftTarget) {
+                                t.deps = t.deps.filter(depId => {
+                                    const depTask = updated.find(dt => dt.id === depId);
+                                    return depTask && depTask.phase === shiftTarget;
+                                });
+                            }
+                        });
+                    }
+
+                    updated.forEach(t => {
+                        if (shiftTarget === 'All' || t.phase === shiftTarget) {
+                            t.start = addDays(t.start, daysToShift);
+                        }
+                    });
+                    return updated;
+                }, null, null, durationType);
+
+                setShowShiftModal(false);
+                setShiftDays(0);
+                setShiftDate('');
+                setShiftTarget('All');
+                setShiftMode('days');
+            };
+
+            const exportNative = () => {
+                const blob = new Blob([JSON.stringify(projects, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `ArchiSchedule_Export_${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const handleImportNative = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const imported = JSON.parse(event.target.result);
+                        if (imported && imported[0] && imported[0].versions) {
+                            setProjects(imported);
+                            setActiveProjectId(imported[0].id);
+                            setActiveVersionId(imported[0].versions[0].id);
+                        } else alert("Invalid file structure.");
+                    } catch (err) { alert("Error reading JSON file."); }
+                };
+                reader.readAsText(file);
+                e.target.value = null;
+            };
+
+            // --- Derived State for Rendering ---
+            const visiblePhases = useMemo(() => phases.filter(p => filterPhase === 'All' || p === filterPhase), [phases, filterPhase]);
+            const filteredTasks = useMemo(() => tasks.filter(t => (filterPhase === 'All' || t.phase === filterPhase) && (filterParty === 'All' || t.party === filterParty)), [tasks, filterPhase, filterParty]);
+
+            const timelineBounds = useMemo(() => getEarliestAndLatestDates(filteredTasks, durationType), [filteredTasks, durationType]);
+            const totalDays = diffDays(timelineBounds.start.toISOString().split('T')[0], timelineBounds.end.toISOString().split('T')[0]);
+
+            const timelineHeaders = useMemo(() => {
+                const headers = { months: [], weeks: [], days: [] };
+                let current = parseDate(timelineBounds.start.toISOString().split('T')[0]);
+                let currentMonth = current.getUTCMonth();
+                let monthStartDay = 0;
+
+                for (let i = 0; i <= totalDays; i++) {
+                    const d = parseDate(timelineBounds.start.toISOString().split('T')[0]);
+                    d.setUTCDate(d.getUTCDate() + i);
+                    const dStr = d.toISOString().split('T')[0];
+                    headers.days.push({ offset: i, date: d, str: dStr, isWeekend: isWeekend(d), isHoliday: isHoliday(dStr) });
+                    if (d.getUTCDay() === 1 || i === 0) headers.weeks.push({ dayOffset: i, date: d });
+
+                    if (d.getUTCMonth() !== currentMonth || i === totalDays) {
+                        headers.months.push({ name: d.toLocaleString('default', { month: 'long', year: 'numeric', timeZone: 'UTC' }), start: monthStartDay, width: i - monthStartDay });
+                        currentMonth = d.getUTCMonth();
+                        monthStartDay = i;
+                    }
+                }
+                return headers;
+            }, [timelineBounds, totalDays]);
+
+            const tasksByPhase = useMemo(() => {
+                const grouped = {};
+                phases.forEach(p => grouped[p] = []);
+                filteredTasks.forEach(t => grouped[t.phase].push(t));
+                return grouped;
+            }, [filteredTasks, phases]);
+
+            const phaseBounds = useMemo(() => {
+                const bounds = {};
+                visiblePhases.forEach(phase => {
+                    const pTasks = tasksByPhase[phase];
+                    if (!pTasks || pTasks.length === 0) return;
+                    let minS = pTasks[0].start;
+                    let maxE = calculateEndDate(pTasks[0].start, pTasks[0].duration, durationType);
+                    pTasks.forEach(t => {
+                        if (t.start < minS) minS = t.start;
+                        const e = calculateEndDate(t.start, t.duration, durationType);
+                        if (e > maxE) maxE = e;
+                    });
+                    const offStart = diffDays(timelineBounds.start.toISOString().split('T')[0], minS);
+                    const offEnd = diffDays(timelineBounds.start.toISOString().split('T')[0], maxE);
+                    bounds[phase] = { minS, maxE, offStart, width: (offEnd - offStart + 1) * dayWidth };
+                });
+                return bounds;
+            }, [tasksByPhase, visiblePhases, durationType, timelineBounds, dayWidth]);
+
+            const taskCoordinates = useMemo(() => {
+                const coords = {};
+                let yCursor = 0;
+                visiblePhases.forEach(phase => {
+                    if (!tasksByPhase[phase] || tasksByPhase[phase].length === 0) return;
+                    yCursor += 40;
+                    if (expandedPhases[phase]) {
+                        tasksByPhase[phase].forEach(task => {
+                            const endDate = calculateEndDate(task.start, task.duration, durationType);
+                            const startOffset = diffDays(timelineBounds.start.toISOString().split('T')[0], task.start);
+                            const endOffset = diffDays(timelineBounds.start.toISOString().split('T')[0], endDate);
+                            let rightX = (endOffset + 1) * dayWidth;
+                            if (task.milestone > 0) rightX = (startOffset * dayWidth) + (dayWidth / 2) + 10;
+                            coords[task.id] = { startX: startOffset * dayWidth, endX: rightX, y: yCursor + 22 };
+                            yCursor += 44;
+                        });
+                    }
+                });
+                return coords;
+            }, [tasksByPhase, visiblePhases, expandedPhases, timelineBounds, dayWidth, durationType]);
+
+            const timelineItems = useMemo(() => {
+                let currentY = 0;
+                const items = [];
+                visiblePhases.forEach((phase) => {
+                    const pBounds = phaseBounds[phase];
+                    if (!pBounds) return;
+
+                    const pStartPercent = (pBounds.offStart / totalDays) * 100;
+                    const pWidthPercent = (pBounds.width / (totalDays * dayWidth)) * 100;
+
+                    items.push({ type: 'phase', phase, bounds: pBounds, y: currentY, left: pStartPercent, width: pWidthPercent });
+                    currentY += showTimelineTasks ? 32 : 40;
+
+                    if (showTimelineTasks) {
+                        const pTasks = tasksByPhase[phase] || [];
+                        pTasks.forEach(task => {
+                            if (task.milestone > 0) return;
+                            const tEnd = calculateEndDate(task.start, task.duration, durationType);
+                            const offStart = diffDays(timelineBounds.start.toISOString().split('T')[0], task.start);
+                            const offEnd = diffDays(timelineBounds.start.toISOString().split('T')[0], tEnd);
+                            const left = (offStart / totalDays) * 100;
+                            const width = ((offEnd - offStart + 1) / totalDays) * 100;
+
+                            items.push({ type: 'task', task, phase, left, width, y: currentY });
+                            currentY += 24;
+                        });
+                        currentY += 16;
+                    }
+                });
+                return { items, totalHeight: currentY };
+            }, [visiblePhases, phaseBounds, tasksByPhase, showTimelineTasks, totalDays, timelineBounds, durationType]);
+
+            const tableInnerWidth = 32 + colWidths.name + colWidths.party + colWidths.duration + colWidths.start + colWidths.end + 16;
+            const todayOffsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], new Date().toISOString().split('T')[0]);
+            const showTodayLine = todayOffsetDays >= 0 && todayOffsetDays <= totalDays;
+
+            // --- Advanced Exports ---
+            const exportExcelGantt = async () => {
+                setIsExporting(true);
+                try {
+                    if (!window.ExcelJS) {
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js');
+                    }
+                    const workbook = new window.ExcelJS.Workbook();
+                    const worksheet = workbook.addWorksheet('Gantt Schedule', {
+                        views: [{ state: 'frozen', xSplit: 6, ySplit: 6 }]
+                    });
+
+                    const hexToArgb = (hex) => {
+                        let h = hex.replace('#', '');
+                        if (h.length === 3) h = h.split('').map(c => c + c).join('');
+                        if (h.length === 6) return 'FF' + h.toUpperCase();
+                        return h.toUpperCase();
+                    };
+
+                    const toExcelDate = (isoStr) => {
+                        const [y, m, d] = isoStr.split('-');
+                        return new Date(Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d)));
+                    };
+
+                    const columns = [
+                        { key: 'phase', width: 25 },
+                        { key: 'name', width: 35 },
+                        { key: 'party', width: 15 },
+                        { key: 'duration', width: 10 },
+                        { key: 'start', width: 15 },
+                        { key: 'end', width: 15 }
+                    ];
+
+                    timelineHeaders.days.forEach((d, i) => {
+                        columns.push({ key: `day_${i}`, width: 3.5 });
+                    });
+
+                    worksheet.columns = columns;
+
+                    // Write titles
+                    worksheet.mergeCells('A1:F1');
+                    const titleCell = worksheet.getCell('A1');
+                    titleCell.value = `${activeVersion.name}`;
+                    titleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: 'FF0F172A' } };
+
+                    worksheet.mergeCells('A2:F2');
+                    const subtitleCell = worksheet.getCell('A2');
+                    subtitleCell.value = `Project: ${activeProject.name}   |   ${activeProject.clientName ? `Client: ${activeProject.clientName}   |   ` : ''}Date: ${new Date().toLocaleDateString()}`;
+                    subtitleCell.font = { name: 'Arial', size: 10, color: { argb: 'FF64748B' } };
+
+                    // Set Row 6 Headers explicitly
+                    const headerRow = worksheet.getRow(6);
+                    headerRow.height = 36;
+                    headerRow.getCell(1).value = 'Phase';
+                    headerRow.getCell(2).value = 'Task Name';
+                    headerRow.getCell(3).value = 'Party';
+                    headerRow.getCell(4).value = 'Duration';
+                    headerRow.getCell(5).value = 'Start Date';
+                    headerRow.getCell(6).value = 'End Date';
+
+                    timelineHeaders.days.forEach((d, i) => {
+                        const cell = headerRow.getCell(6 + i + 1);
+                        cell.value = toExcelDate(d.str);
+                        cell.numFmt = 'm/d';
+                    });
+
+                    for (let i = 1; i <= 6 + timelineHeaders.days.length; i++) {
+                        const cell = headerRow.getCell(i);
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+                        cell.font = { name: 'Arial', size: i > 6 ? 8 : 10, bold: true, color: { argb: 'FF334155' } };
+                        cell.alignment = { vertical: 'middle', horizontal: i > 6 ? 'center' : 'left', textRotation: i > 6 ? 90 : 0 };
+                        cell.border = {
+                            top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                            bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                            left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                            right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+                        };
+                    }
+
+                    // Timeline Months Header Row 5
+                    let currentMonth = "";
+                    let startMonthCol = 7;
+                    timelineHeaders.days.forEach((d, i) => {
+                        const mStr = d.date.toLocaleString('default', { month: 'short', timeZone: 'UTC' }) + " '" + d.date.getUTCFullYear().toString().slice(-2);
+                        if (mStr !== currentMonth || i === timelineHeaders.days.length - 1) {
+                            if (currentMonth !== "") {
+                                const endCol = i === timelineHeaders.days.length - 1 ? 6 + i + 1 : 6 + i;
+                                if (endCol > startMonthCol) {
+                                    worksheet.mergeCells(5, startMonthCol, 5, endCol - 1);
+                                    const mCell = worksheet.getCell(5, startMonthCol);
+                                    mCell.value = currentMonth;
+                                    mCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF475569' } };
+                                    mCell.alignment = { horizontal: 'center', vertical: 'middle' };
+                                    mCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+                                    mCell.border = {
+                                        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                                        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                                        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                                        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+                                    };
+                                }
+                            }
+                            currentMonth = mStr;
+                            startMonthCol = 6 + i + 1;
+                        }
+                    });
+
+                    const holidaySheet = workbook.addWorksheet('Holidays', { state: 'hidden' });
+                    HOLIDAYS.forEach((h, idx) => {
+                        holidaySheet.getCell(`A${idx + 1}`).value = toExcelDate(h);
+                    });
+                    const holidaysRange = `Holidays!$A$1:$A$${HOLIDAYS.length}`;
+
+                    let currentRowNum = 7;
+
+                    visiblePhases.forEach(p => {
+                        if (!tasksByPhase[p] || tasksByPhase[p].length === 0) return;
+
+                        const phaseRow = worksheet.getRow(currentRowNum);
+                        phaseRow.height = 20;
+                        phaseRow.getCell(1).value = p;
+                        phaseRow.getCell(1).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+                        phaseRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+                        worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
+
+                        for (let i = 1; i <= 6; i++) {
+                            phaseRow.getCell(i).border = { bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } } };
+                        }
+
+                        // Apply weekend borders to phase row timeline
+                        for (let col = 7; col <= 6 + timelineHeaders.days.length; col++) {
+                            const isH = timelineHeaders.days[col - 7].isHoliday;
+                            const isW = timelineHeaders.days[col - 7].isWeekend;
+                            phaseRow.getCell(col).border = { bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } } };
+                            if (isH || isW) phaseRow.getCell(col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isH ? 'FFFEE2E2' : 'FFF1F5F9' } };
+                        }
+
+                        currentRowNum++;
+
+                        tasksByPhase[p].forEach(t => {
+                            const row = worksheet.getRow(currentRowNum);
+                            row.height = 18;
+
+                            const isMS = t.milestone > 0;
+                            row.getCell(1).value = p;
+                            row.getCell(1).font = { color: { argb: 'FFFFFFFF' } }; // Invisible phase name for filtering
+
+                            row.getCell(2).value = t.name;
+                            row.getCell(2).font = { name: 'Arial', size: 9, bold: isMS, color: { argb: isMS ? (t.milestone === 2 ? 'FF059669' : 'FFD97706') : 'FF334155' } };
+                            row.getCell(2).alignment = { indent: 1 };
+
+                            row.getCell(3).value = t.party;
+                            row.getCell(3).font = { name: 'Arial', size: 9 };
+
+                            const durCell = row.getCell(4);
+                            if (isMS) {
+                                durCell.value = 'M';
+                            } else {
+                                durCell.value = durationUnit === 'Weeks' ? Math.ceil(t.duration / (durationType === 'Business' ? 5 : 7)) : t.duration;
+                                durCell.dataValidation = { type: 'whole', operator: 'greaterThan', formula1: 0, showErrorMessage: true, errorTitle: 'Invalid Duration', error: 'Duration must be > 0' };
+                            }
+                            durCell.alignment = { horizontal: 'center' };
+                            durCell.font = { name: 'Arial', size: 9 };
+
+                            const startCell = row.getCell(5);
+                            startCell.value = toExcelDate(t.start);
+                            startCell.numFmt = 'mm/dd/yyyy';
+                            startCell.font = { name: 'Arial', size: 9 };
+
+                            const endCell = row.getCell(6);
+                            if (isMS) {
+                                endCell.value = toExcelDate(t.start);
+                            } else {
+                                if (durationType === 'Business') {
+                                    endCell.value = { formula: `WORKDAY(E${currentRowNum}-1, D${currentRowNum}, ${holidaysRange})` };
+                                } else {
+                                    if (durationUnit === 'Weeks') {
+                                        endCell.value = { formula: `E${currentRowNum} + (D${currentRowNum} * 7) - 1` };
+                                    } else {
+                                        endCell.value = { formula: `E${currentRowNum} + D${currentRowNum} - 1` };
+                                    }
+                                }
+                            }
+                            endCell.numFmt = 'mm/dd/yyyy';
+                            endCell.font = { name: 'Arial', size: 9, color: { argb: 'FF64748B' } };
+                            if (!isMS) endCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+
+                            for (let i = 1; i <= 6; i++) {
+                                row.getCell(i).border = {
+                                    bottom: { style: 'thin', color: { argb: 'FFF1F5F9' } },
+                                    right: i === 6 ? { style: 'thin', color: { argb: 'FFCBD5E1' } } : undefined
+                                };
+                            }
+
+                            // Weekend data rows
+                            for (let col = 7; col <= 6 + timelineHeaders.days.length; col++) {
+                                const isH = timelineHeaders.days[col - 7].isHoliday;
+                                const isW = timelineHeaders.days[col - 7].isWeekend;
+                                const cell = row.getCell(col);
+
+                                cell.border = {
+                                    bottom: { style: 'thin', color: { argb: 'FFF1F5F9' } },
+                                    right: { style: 'thin', color: { argb: 'FFF8FAFC' } }
+                                };
+
+                                if (isH || isW) {
+                                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isH ? 'FFFEE2E2' : 'FFF1F5F9' } };
+                                    cell.border = {
+                                        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                                        right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                                        bottom: { style: 'thin', color: { argb: 'FFF1F5F9' } }
+                                    };
+                                }
+                            }
+
+                            row.outlineLevel = 1;
+                            currentRowNum++;
+                        });
+                    });
+
+                    const startDataRow = 7;
+                    const endDataRow = currentRowNum - 1;
+                    const getColLetter = (col) => {
+                        let letter = '';
+                        while (col > 0) {
+                            let temp = (col - 1) % 26;
+                            letter = String.fromCharCode(temp + 65) + letter;
+                            col = (col - temp - 1) / 26;
+                        }
+                        return letter;
+                    };
+                    const cfcStartColLexer = getColLetter(7);
+                    const cfcEndColLexer = getColLetter(6 + timelineHeaders.days.length);
+
+                    if (endDataRow >= startDataRow && timelineHeaders.days.length > 0) {
+                        const gridRange = `${cfcStartColLexer}${startDataRow}:${cfcEndColLexer}${endDataRow}`;
+
+                        visiblePhases.forEach(p => {
+                            const phaseColorArgb = hexToArgb(phaseColors[p] || '#94a3b8');
+                            worksheet.addConditionalFormatting({
+                                ref: gridRange,
+                                rules: [
+                                    {
+                                        priority: 2,
+                                        type: 'expression',
+                                        formulae: [`AND($A7="${p.replace(/"/g, '""')}", ${cfcStartColLexer}$6>=$E7, ${cfcStartColLexer}$6<=$F7)`],
+                                        style: {
+                                            fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: phaseColorArgb } },
+                                            border: {
+                                                top: { style: 'thin', color: { argb: phaseColorArgb } },
+                                                bottom: { style: 'thin', color: { argb: phaseColorArgb } }
+                                            }
+                                        }
+                                    }
+                                ]
+                            });
+                        });
+
+                        worksheet.addConditionalFormatting({
+                            ref: gridRange,
+                            rules: [
+                                {
+                                    priority: 1,
+                                    type: 'expression',
+                                    formulae: [`AND($D7="M", ${cfcStartColLexer}$6=$E7)`],
+                                    style: {
+                                        fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FF10B981' } }
+                                    }
+                                }
+                            ]
+                        });
+                    }
+
+                    const buffer = await workbook.xlsx.writeBuffer();
+                    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${activeProject.name}_${activeVersion.name}_Gantt.xlsx`.replace(/\s+/g, '_');
+                    a.click();
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    console.error(err);
+                    alert("Failed to export Excel! " + err.message);
+                }
+                setIsExporting(false);
+                setShowExportModal(false);
+            };
+
+            const exportCSV = () => {
+                let csv = 'Phase,Task Name,Party,Duration,Start Date,End Date\n';
+                visiblePhases.forEach(p => {
+                    if (tasksByPhase[p]) {
+                        tasksByPhase[p].forEach(t => {
+                            const endStr = calculateEndDate(t.start, t.duration, durationType);
+                            csv += `"${p}","${t.name}","${t.party}","${t.duration}","${t.start}","${endStr}"\n`;
+                        });
+                    }
+                });
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${activeProject.name}_${activeVersion.name}.csv`.replace(/\s+/g, '_');
+                a.click();
+                URL.revokeObjectURL(url);
+                setShowExportModal(false);
+            };
+
+            const exportMilestoneICS = () => {
+                const icsContent = generateICS(filteredTasks);
+                const blob = new Blob([icsContent], { type: 'text/calendar' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${activeProject.name}_Milestones.ics`.replace(/\s+/g, '_');
+                a.click();
+                URL.revokeObjectURL(url);
+                setShowExportModal(false);
+            };
+
+            const exportPDF = async () => {
+                setIsExporting(true);
+                try {
+                    if (!window.jspdf) {
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+                    }
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF('landscape', 'pt', 'letter');
+
+                    const hexToRgb = (hex) => {
+                        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                        return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 100, g: 100, b: 100 };
+                    };
+
+                    const margin = 40;
+                    const pageWidth = doc.internal.pageSize.getWidth();
+                    const pageHeight = doc.internal.pageSize.getHeight();
+
+                    const drawHeader = (pageNum, totalPages, titlePostfix) => {
+                        doc.setFont("helvetica", "bold");
+                        doc.setFontSize(16);
+                        doc.setTextColor(15, 23, 42);
+                        doc.text(`${activeVersion.name}${titlePostfix}`, margin, margin);
+
+                        doc.setFontSize(10);
+                        doc.setFont("helvetica", "normal");
+                        doc.setTextColor(100, 116, 139);
+                        doc.text(`Project: ${activeProject.name}   |   ${activeProject.clientName ? `Client: ${activeProject.clientName}   |   ` : ''}Date: ${new Date().toLocaleDateString()}`, margin, margin + 15);
+
+                        if (totalPages) {
+                            doc.text(`Page ${pageNum} of ${totalPages}`, pageWidth - margin - 60, margin + 15);
+                        } else {
+                            doc.text(`Page 1 of 1`, pageWidth - margin - 60, margin + 15);
+                        }
+                        doc.setDrawColor(226, 232, 240);
+                        doc.setLineWidth(1);
+                        doc.line(margin, margin + 25, pageWidth - margin, margin + 25);
+                    };
+
+                    if (layoutView === 'Timeline') {
+                        drawHeader(1, 1);
+
+                        const topOffset = margin + 60;
+                        const timelineW = pageWidth - margin * 2;
+                        const timelineH = pageHeight - topOffset - 60;
+
+                        const axisY = topOffset + (timelineH / 2) - 20;
+                        doc.setDrawColor(203, 213, 225);
+                        doc.setLineWidth(2);
+                        doc.line(margin, axisY, margin + timelineW, axisY);
+
+                        const milestones = filteredTasks.filter(t => t.milestone > 0);
+                        milestones.forEach((m, i) => {
+                            const offsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], m.start);
+                            const percent = Math.max(0, Math.min(1, offsetDays / totalDays));
+                            const x = margin + percent * timelineW;
+
+                            const isOwner = m.milestone === 2;
+                            const h = isOwner ? 70 : 40;
+
+                            doc.setDrawColor(203, 213, 225);
+                            doc.setLineWidth(1);
+                            doc.line(x, axisY, x, axisY - h);
+
+                            if (isOwner) {
+                                doc.setFillColor(16, 185, 129); // emerald-500
+                            } else {
+                                doc.setFillColor(251, 191, 36);
+                            }
+
+                            const size = 4;
+                            doc.triangle(x, axisY - size, x + size, axisY, x, axisY + size, 'F');
+                            doc.triangle(x, axisY - size, x - size, axisY, x, axisY + size, 'F');
+
+                            doc.setFontSize(8);
+                            doc.setFont("helvetica", isOwner ? "bold" : "normal");
+                            doc.setTextColor(isOwner ? 4 : 51, isOwner ? 120 : 65, isOwner ? 87 : 85);
+                            const textW = doc.getTextWidth(m.name) + 10;
+                            const textX = Math.max(margin, Math.min(pageWidth - margin - textW, x - (textW / 2)));
+                            const textY = axisY - h - 15;
+
+                            doc.setDrawColor(226, 232, 240);
+                            doc.setFillColor(isOwner ? 209 : 248, isOwner ? 250 : 250, isOwner ? 229 : 252);
+                            doc.roundedRect(textX, textY, textW, 14, 2, 2, 'FD');
+                            doc.text(m.name, textX + 5, textY + 10);
+
+                            doc.setFontSize(7);
+                            doc.setTextColor(148, 163, 184);
+                            doc.text(formatShortDate(m.start), x, textY - 4, { align: 'center' });
+                        });
+
+                        let currentY = axisY + 20;
+                        visiblePhases.forEach((phase) => {
+                            const pBounds = phaseBounds[phase];
+                            if (!pBounds) return;
+
+                            const pStartPercent = pBounds.offStart / totalDays;
+                            const pWidthPercent = pBounds.width / (totalDays * dayWidth);
+
+                            const x = margin + pStartPercent * timelineW;
+                            const w = pWidthPercent * timelineW;
+
+                            const colorStr = phaseColors[phase] || '#94a3b8';
+                            const rgb = hexToRgb(colorStr);
+
+                            doc.setFillColor(rgb.r, rgb.g, rgb.b);
+                            doc.roundedRect(x, currentY, Math.max(w, 2), 14, 3, 3, 'F');
+
+                            doc.setFontSize(8);
+                            doc.setFont("helvetica", "bold");
+                            doc.setTextColor(255, 255, 255);
+
+                            let text = phase;
+                            if (doc.getTextWidth(text) > w - 10) {
+                                text = text.substring(0, Math.floor((w - 10) / 5)) + '...';
+                                if (w < 20) text = '';
+                            }
+                            if (text) doc.text(text, x + 5, currentY + 10);
+
+                            doc.setFontSize(7);
+                            doc.setTextColor(148, 163, 184);
+                            doc.text(formatShortDate(pBounds.minS), x, currentY - 2);
+                            doc.text(formatShortDate(pBounds.maxE), x + w, currentY - 2, { align: 'right' });
+
+                            currentY += showTimelineTasks ? 20 : 25;
+
+                            if (showTimelineTasks) {
+                                const pTasks = tasksByPhase[phase] || [];
+                                pTasks.forEach(task => {
+                                    if (task.milestone > 0) return;
+                                    const tEnd = calculateEndDate(task.start, task.duration, durationType);
+                                    const offStart = diffDays(timelineBounds.start.toISOString().split('T')[0], task.start);
+                                    const offEnd = diffDays(timelineBounds.start.toISOString().split('T')[0], tEnd);
+                                    const left = offStart / totalDays;
+                                    const width = (offEnd - offStart + 1) / totalDays;
+
+                                    const tx = margin + left * timelineW;
+                                    const tw = width * timelineW;
+
+                                    doc.setFillColor(Math.min(255, rgb.r + 30), Math.min(255, rgb.g + 30), Math.min(255, rgb.b + 30));
+                                    doc.roundedRect(tx, currentY, Math.max(tw, 2), 10, 1, 1, 'F');
+
+                                    doc.setFontSize(7);
+                                    doc.setFont("helvetica", "bold");
+                                    doc.setTextColor(255, 255, 255);
+                                    let tName = task.name;
+                                    if (doc.getTextWidth(tName) > tw - 4) {
+                                        tName = tName.substring(0, Math.floor((tw - 4) / 4)) + '...';
+                                        if (tw < 15) tName = '';
+                                    }
+                                    if (tName) doc.text(tName, tx + 2, currentY + 8);
+
+                                    currentY += 12;
+                                });
+                                currentY += 10;
+                            }
+                        });
+                    } else {
+                        const topOffset = margin + 40;
+                        const rowHeight = 22;
+                        const maxRowsPerPage = Math.floor((pageHeight - topOffset - 40) / rowHeight);
+
+                        const colName = margin;
+                        const colParty = margin + 140;
+                        const colDur = margin + 200;
+                        const colStart = margin + 240;
+                        const tableWidth = 300;
+                        const timelineX = margin + tableWidth;
+                        const timelineMaxW = pageWidth - margin * 2 - tableWidth;
+
+                        const rows = [];
+                        visiblePhases.forEach(p => {
+                            const pTasks = tasksByPhase[p];
+                            if (pTasks && pTasks.length > 0) {
+                                rows.push({ type: 'phase', phase: p });
+                                pTasks.forEach(t => rows.push({ type: 'task', phase: p, task: t }));
+                            }
+                        });
+
+                        if (rows.length === 0) {
+                            rows.push({ type: 'task', phase: 'None', task: { name: 'No tasks', party: '', duration: 1, start: new Date().toISOString().split('T')[0], milestone: 0 } });
+                        }
+
+                        let maxTaskEndIdx = 0;
+                        rows.forEach(r => {
+                            if (r.type === 'task') {
+                                const endDateStr = calculateEndDate(r.task.start, r.task.duration, durationType);
+                                const eIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], endDateStr);
+                                if (eIdx > maxTaskEndIdx) maxTaskEndIdx = eIdx;
+                            }
+                        });
+                        const pdfTotalDays = Math.max(1, Math.min(totalDays, maxTaskEndIdx + 5));
+
+                        let printDayWidth = timelineMaxW / Math.max(1, pdfTotalDays);
+                        let hPages = 1;
+                        if (printDayWidth < 5) {
+                            printDayWidth = 5;
+                            hPages = Math.ceil((pdfTotalDays * printDayWidth) / timelineMaxW);
+                        }
+                        const daysPerPage = Math.floor(timelineMaxW / printDayWidth);
+
+                        const vPages = Math.ceil(rows.length / maxRowsPerPage);
+                        const totalPages = vPages * hPages;
+                        let pageNum = 1;
+
+                        for (let h = 0; h < hPages; h++) {
+                            const startDayIdx = h * daysPerPage;
+                            const endDayIdx = Math.min(pdfTotalDays, startDayIdx + daysPerPage);
+
+                            for (let v = 0; v < vPages; v++) {
+                                const startRowInfo = v * maxRowsPerPage;
+                                if (startRowInfo >= rows.length) {
+                                    // Break early if we've run out of rows on this vertical pass.
+                                    break;
+                                }
+
+                                if (pageNum > 1) doc.addPage();
+
+                                drawHeader(pageNum, totalPages, '');
+
+                                let startY = topOffset;
+
+                                // 2. Table Headers
+                                doc.setFillColor(248, 250, 252);
+                                doc.rect(margin, startY, pageWidth - margin * 2, 30, 'F');
+
+                                doc.setFont("helvetica", "bold");
+                                doc.setFontSize(9);
+                                doc.setTextColor(51, 65, 85);
+
+                                if (h === 0) {
+                                    doc.text("Task Name", colName + 5, startY + 20);
+                                    doc.text("Party", colParty, startY + 20);
+                                    doc.text("Duration", colDur, startY + 20);
+                                    doc.text("Start", colStart, startY + 20);
+                                } else {
+                                    doc.text(`Timeline (Cont. Part ${h + 1})`, colName + 5, startY + 20);
+                                }
+
+                                doc.setDrawColor(203, 213, 225);
+                                doc.line(timelineX, startY, timelineX, startY + 30);
+
+                                // Timeline Header (Months & Days)
+                                let currentMonthStr = "";
+                                let monthStartX = timelineX;
+                                doc.setFontSize(8);
+                                doc.setFont("helvetica", "normal");
+
+                                for (let i = startDayIdx; i <= endDayIdx; i++) {
+                                    if (i >= timelineHeaders.days.length) break;
+                                    const d = timelineHeaders.days[i];
+                                    const x = timelineX + (i - startDayIdx) * printDayWidth;
+
+                                    const yStr = d.date.getUTCFullYear().toString().slice(-2);
+                                    const mStr = d.date.toLocaleString('default', { month: 'short', timeZone: 'UTC' }) + ' \'' + yStr;
+                                    if (mStr !== currentMonthStr || i === endDayIdx) {
+                                        if (currentMonthStr !== "") {
+                                            doc.text(currentMonthStr, monthStartX + 2, startY + 12);
+                                            doc.setDrawColor(203, 213, 225);
+                                            doc.line(x, startY, x, startY + 15);
+                                        }
+                                        currentMonthStr = mStr;
+                                        monthStartX = x;
+                                    }
+
+                                    if (printDayWidth > 15) {
+                                        doc.setTextColor(100, 116, 139);
+                                        doc.text(`${d.date.getUTCDate()}`, x + (printDayWidth / 2), startY + 25, { align: 'center' });
+                                    } else if (d.date.getUTCDay() === 1) {
+                                        doc.setTextColor(148, 163, 184);
+                                        doc.text(`${d.date.getUTCMonth() + 1}/${d.date.getUTCDate()}`, x + 2, startY + 25);
+                                    }
+                                }
+
+                                doc.setDrawColor(226, 232, 240);
+                                doc.line(margin, startY + 30, pageWidth - margin, startY + 30);
+
+                                const startRow = v * maxRowsPerPage;
+                                let endRow = Math.min(rows.length, startRow + maxRowsPerPage);
+
+                                // Draw Weekend Shading and Vertical Lines
+                                for (let i = startDayIdx; i <= endDayIdx; i++) {
+                                    if (i >= timelineHeaders.days.length) break;
+                                    const d = timelineHeaders.days[i];
+                                    const x = timelineX + (i - startDayIdx) * printDayWidth;
+
+                                    // 1. Shading
+                                    if (d.isWeekend || d.isHoliday) {
+                                        doc.setFillColor(d.isHoliday ? 254 : 248, d.isHoliday ? 242 : 250, d.isHoliday ? 242 : 252);
+                                        doc.rect(x, startY + 30, printDayWidth, (endRow - startRow) * rowHeight, 'F');
+                                        doc.setDrawColor(241, 245, 249);
+                                        doc.line(x, startY + 30, x, startY + 30 + (endRow - startRow) * rowHeight);
+                                    }
+
+                                    // 2. Vertical Lines
+                                    if (d.date.getUTCDay() === 1) { // Monday / Week Start
+                                        doc.setDrawColor(226, 232, 240); // subtle week line
+                                        doc.line(x, startY + 20, x, startY + 30 + (endRow - startRow) * rowHeight);
+                                    } else if (printDayWidth > 10 && !d.isWeekend && !d.isHoliday) { // Daily lines if zoomed in
+                                        doc.setDrawColor(245, 248, 250); // ultra light
+                                        doc.line(x, startY + 30, x, startY + 30 + (endRow - startRow) * rowHeight);
+                                    }
+                                }
+
+                                // Draw Rows
+                                startY += 30;
+                                for (let r = startRow; r < endRow; r++) {
+                                    const row = rows[r];
+                                    const isPhase = row.type === 'phase';
+                                    const y = startY + (r - startRow) * rowHeight;
+
+                                    if ((r - startRow) % 2 === 1 && !isPhase) {
+                                        doc.setFillColor(248, 250, 252);
+                                        doc.rect(margin, y, tableWidth, rowHeight, 'F');
+                                    }
+
+                                    if (isPhase) {
+                                        doc.setFillColor(241, 245, 249);
+                                        doc.rect(margin, y, pageWidth - margin * 2, rowHeight, 'F');
+                                        if (h === 0) {
+                                            doc.setFont("helvetica", "bold");
+                                            doc.setTextColor(15, 23, 42);
+                                            doc.setFontSize(10);
+                                            doc.text(row.phase, colName + 5, y + 15);
+                                        }
+                                    } else {
+                                        if (h === 0) {
+                                            const t = row.task;
+                                            const isMS = t.milestone > 0;
+
+                                            doc.setFont("helvetica", isMS ? "bold" : "normal");
+                                            if (t.milestone === 2) {
+                                                doc.setTextColor(5, 150, 105); // emerald-600
+                                            } else if (t.milestone === 1) {
+                                                doc.setTextColor(217, 119, 6); // amber-600
+                                            } else {
+                                                doc.setTextColor(51, 65, 85); // slate-700
+                                            }
+                                            doc.setFontSize(9);
+
+                                            let nameDisp = t.name;
+                                            if (nameDisp.length > 25) nameDisp = nameDisp.substring(0, 23) + '...';
+                                            doc.text(nameDisp, colName + 15, y + 14);
+
+                                            doc.setFont("helvetica", "normal");
+                                            doc.setTextColor(51, 65, 85);
+
+                                            let partyDisp = t.party;
+                                            if (partyDisp.length > 10) partyDisp = partyDisp.substring(0, 8) + '...';
+                                            doc.text(partyDisp, colParty, y + 14);
+
+                                            const durLabel = isMS ? 'M' : `${durationUnit === 'Weeks' ? Math.ceil(t.duration / (durationType === 'Business' ? 5 : 7)) : t.duration}${durationUnit.charAt(0)}`;
+                                            doc.text(durLabel, colDur, y + 14);
+
+                                            doc.setFont("helvetica", isMS ? "bold" : "normal");
+                                            if (t.milestone === 2) {
+                                                doc.setTextColor(5, 150, 105); // emerald-600
+                                            } else if (t.milestone === 1) {
+                                                doc.setTextColor(217, 119, 6); // amber-600
+                                            } else {
+                                                doc.setTextColor(51, 65, 85); // slate-700
+                                            }
+                                            doc.text(formatShortDate(t.start), colStart, y + 14);
+                                        }
+
+                                        const t = row.task;
+                                        const endDateStr = calculateEndDate(t.start, t.duration, durationType);
+                                        const tStartIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], t.start);
+                                        const tEndIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], endDateStr);
+
+                                        if (tEndIdx >= startDayIdx && tStartIdx <= endDayIdx) {
+                                            const colorStr = phaseColors[row.phase] || '#94a3b8';
+                                            const rgb = hexToRgb(colorStr);
+
+                                            let segments = [];
+                                            if (viewMode === 'Business' && t.milestone === 0) {
+                                                let currentSegStart = null;
+                                                let current = parseDate(t.start);
+                                                const endD = parseDate(endDateStr);
+                                                while (current <= endD) {
+                                                    const dStr = current.toISOString().split('T')[0];
+                                                    if (!isNonWorkingDay(dStr, 'Business')) {
+                                                        if (!currentSegStart) currentSegStart = dStr;
+                                                    } else {
+                                                        if (currentSegStart) { segments.push({ start: currentSegStart, end: addDays(dStr, -1) }); currentSegStart = null; }
+                                                    }
+                                                    current.setUTCDate(current.getUTCDate() + 1);
+                                                }
+                                                if (currentSegStart) segments.push({ start: currentSegStart, end: endDateStr });
+                                            } else {
+                                                segments.push({ start: t.start, end: endDateStr });
+                                            }
+
+                                            if (t.milestone > 0) {
+                                                if (t.milestone === 2) {
+                                                    doc.setFillColor(16, 185, 129); // emerald-500
+                                                } else {
+                                                    doc.setFillColor(251, 191, 36); // amber-400
+                                                }
+                                                const cx = timelineX + (tStartIdx - startDayIdx) * printDayWidth + (printDayWidth / 2);
+                                                const cy = y + (rowHeight / 2);
+                                                const size = 5;
+                                                doc.triangle(cx, cy - size, cx + size, cy, cx, cy + size, 'F');
+                                                doc.triangle(cx, cy - size, cx - size, cy, cx, cy + size, 'F');
+                                            } else {
+                                                if (segments.length > 1) {
+                                                    const overallDrawStartIdx = Math.max(startDayIdx, tStartIdx);
+                                                    const overallDrawEndIdx = Math.min(endDayIdx, tEndIdx);
+                                                    if (overallDrawEndIdx >= overallDrawStartIdx) {
+                                                        doc.setFillColor(Math.floor(rgb.r + (255 - rgb.r) * 0.8), Math.floor(rgb.g + (255 - rgb.g) * 0.8), Math.floor(rgb.b + (255 - rgb.b) * 0.8));
+                                                        const oXStart = timelineX + (overallDrawStartIdx - startDayIdx) * printDayWidth;
+                                                        const oXEnd = timelineX + ((overallDrawEndIdx + 1) - startDayIdx) * printDayWidth;
+                                                        doc.roundedRect(oXStart, y + 4, Math.max(oXEnd - oXStart, 2), rowHeight - 8, 2, 2, 'F');
+                                                    }
+                                                }
+
+                                                segments.forEach(seg => {
+                                                    const segStartIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.start);
+                                                    const segEndIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.end);
+
+                                                    if (segEndIdx >= startDayIdx && segStartIdx <= endDayIdx) {
+                                                        const drawStartIdx = Math.max(startDayIdx, segStartIdx);
+                                                        const drawEndIdx = Math.min(endDayIdx, segEndIdx);
+
+                                                        const xStart = timelineX + (drawStartIdx - startDayIdx) * printDayWidth;
+                                                        const xEnd = timelineX + ((drawEndIdx + 1) - startDayIdx) * printDayWidth;
+                                                        let width = xEnd - xStart;
+
+                                                        doc.setFillColor(rgb.r, rgb.g, rgb.b);
+                                                        if (width < 2) width = 2; // minimum readable width
+                                                        doc.roundedRect(xStart, y + 4, width, rowHeight - 8, 2, 2, 'F');
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+
+                                    doc.setDrawColor(226, 232, 240);
+                                    if (h === 0) {
+                                        doc.line(colParty - 5, y, colParty - 5, y + rowHeight);
+                                        doc.line(colDur - 5, y, colDur - 5, y + rowHeight);
+                                        doc.line(colStart - 5, y, colStart - 5, y + rowHeight);
+                                    }
+                                    doc.line(timelineX, y, timelineX, y + rowHeight);
+                                }
+
+                                // Bottom bounding line
+                                doc.setDrawColor(203, 213, 225);
+                                doc.line(margin, startY + (endRow - startRow) * rowHeight, pageWidth - margin, startY + (endRow - startRow) * rowHeight);
+
+                                pageNum++;
+                            }
+                        }
+                    }
+
+                    const pdfBlob = doc.output('blob');
+                    const url = URL.createObjectURL(pdfBlob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${activeProject.name.replace(/\s+/g, '_')}_Schedule.pdf`;
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                } catch (err) {
+                    console.error(err);
+                    alert("Failed to export PDF! " + err.message);
+                }
+                setIsExporting(false);
+                setShowExportModal(false);
+            };
+
+            return (
+                <div className={`flex flex-col h-screen font-sans transition-colors ${isDarkMode ? 'dark bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-800'} ${(resizingCol || resizingTimeline || resizingPanel) ? 'select-none' : ''} ${dragTaskState ? 'select-none' : ''}`}>
+                    <input type="file" ref={fileInputRef} accept=".json" style={{ display: 'none' }} onChange={handleImportNative} />
+
+                    {/* --- TOP HEADER --- */}
+                    <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-3 flex items-center justify-between shadow-sm z-30 relative transition-colors">
+                        <div className="flex items-center space-x-4">
+                            <div className="bg-gradient-to-br from-indigo-500 to-indigo-700 p-2 rounded-xl shadow-inner text-white">
+                                <Briefcase className="w-5 h-5" />
+                            </div>
+                            <div className="flex flex-col">
+                                <h1 className="text-xl font-bold tracking-tight leading-tight text-slate-900 dark:text-white">ArchiSchedule</h1>
+
+                                <div className="group relative flex items-center text-xs font-semibold text-slate-500 dark:text-slate-400 cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 mt-0.5 pb-1">
+                                    <Folder className="w-3 h-3 mr-1" /> {activeProject.name} <span className="mx-1">/</span> <FileIcon className="w-3 h-3 mr-1" /> {activeVersion.name}
+                                    {activeProject.clientName && <><span className="mx-1">/</span> <Briefcase className="w-3 h-3 mr-1" /> {activeProject.clientName}</>}
+                                    <ChevronDown className="w-3 h-3 ml-1" />
+
+                                    <div className="absolute top-full left-0 w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 py-2">
+                                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1 px-4">Projects</div>
+                                        <div className="px-2 mb-2">
+                                            {projects.map(p => (
+                                                <div key={p.id} className="flex items-center justify-between px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-md group/proj">
+                                                    <button onClick={() => { setActiveProjectId(p.id); setActiveVersionId(p.versions[0].id); }} className={`flex-1 text-left text-sm font-medium truncate ${activeProjectId === p.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-200'}`}>
+                                                        {p.name}
+                                                    </button>
+                                                    <button onClick={(e) => { e.stopPropagation(); setRenameModal({ type: 'project', id: p.id, name: p.name, clientName: p.clientName || '' }); }} className="opacity-0 group-hover/proj:opacity-100 text-slate-400 hover:text-indigo-600 p-1"><Edit2 className="w-3 h-3" /></button>
+                                                </div>
+                                            ))}
+                                            <button onClick={addProject} className="w-full text-left px-2 py-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-md mt-1 flex items-center"><Folder className="w-3.5 h-3.5 mr-1.5" /> New Project</button>
+                                        </div>
+                                        <div className="h-px bg-slate-100 dark:bg-slate-700 my-2"></div>
+                                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1 px-4">Versions</div>
+                                        <div className="px-2 mb-2">
+                                            {activeProject.versions.map(v => (
+                                                <div key={v.id} className="flex items-center justify-between px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-md group/ver">
+                                                    <button onClick={() => setActiveVersionId(v.id)} className={`flex-1 text-left text-sm font-medium truncate flex items-center ${activeVersionId === v.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-200'}`}>
+                                                        <FileIcon className="w-3.5 h-3.5 mr-2 opacity-50" /> {v.name}
+                                                    </button>
+                                                    <button onClick={(e) => { e.stopPropagation(); setRenameModal({ type: 'version', id: v.id, name: v.name }); }} className="opacity-0 group-hover/ver:opacity-100 text-slate-400 hover:text-indigo-600 p-1"><Edit2 className="w-3 h-3" /></button>
+                                                </div>
+                                            ))}
+                                            <div className="flex space-x-1 mt-1">
+                                                <button onClick={duplicateVersion} className="flex-1 text-left px-2 py-1.5 rounded-md text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center justify-center">
+                                                    <Copy className="w-3.5 h-3.5 mr-1" /> Duplicate
+                                                </button>
+                                                <button onClick={addBlankVersion} className="flex-1 text-left px-2 py-1.5 rounded-md text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 flex items-center justify-center">
+                                                    <FilePlus className="w-3.5 h-3.5 mr-1" /> Blank
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="h-px bg-slate-100 dark:bg-slate-700 my-2"></div>
+                                        <div className="px-2 flex flex-col space-y-1">
+                                            <button onClick={() => fileInputRef.current.click()} className="w-full text-left px-2 py-1.5 rounded-md text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center"><Upload className="w-3.5 h-3.5 mr-2" /> Import App File (.json)</button>
+                                            <button onClick={exportNative} className="w-full text-left px-2 py-1.5 rounded-md text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center"><Download className="w-3.5 h-3.5 mr-2" /> Export App File (.json)</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center space-x-4">
+
+                            {layoutView === 'Timeline' && (
+                                <button onClick={() => setShowTimelineTasks(!showTimelineTasks)} className={`flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition-all border shadow-sm ${showTimelineTasks ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`} title="Show individual events">
+                                    <ListTree className="w-3.5 h-3.5 mr-1.5" /> Show Tasks
+                                </button>
+                            )}
+
+                            <div className="flex items-center bg-slate-100 dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700 shadow-inner">
+                                <button onClick={() => setLayoutView('Gantt')} className={`flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition-all ${layoutView === 'Gantt' ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'}`} title="Gantt View">
+                                    <LayoutDashboard className="w-3.5 h-3.5 mr-1.5" /> Gantt
+                                </button>
+                                <button onClick={() => setLayoutView('Timeline')} className={`flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition-all ${layoutView === 'Timeline' ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'}`} title="Timeline View">
+                                    <Presentation className="w-3.5 h-3.5 mr-1.5" /> Timeline
+                                </button>
+                            </div>
+
+                            <div className="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
+
+                            <div className="flex items-center space-x-2">
+                                <button onClick={() => setShowShiftModal(true)} className="flex items-center space-x-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm" title="Shift Schedule">
+                                    <CalendarDays className="w-4 h-4" /> <span>Shift</span>
+                                </button>
+                                <button onClick={() => setShowExportModal(true)} className="flex items-center space-x-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm" title="Export">
+                                    <Download className="w-4 h-4" /> <span>Export</span>
+                                </button>
+                            </div>
+
+                            <div className="flex items-center bg-slate-100 dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700 shadow-inner">
+                                {[{ id: 'Weeks', label: 'Wks' }, { id: 'Business', label: 'Bus' }, { id: 'Days', label: 'Cal' }].map(mode => (
+                                    <button key={mode.id} onClick={() => handleViewModeChange(mode.id)} className={`flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === mode.id ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
+                                        {mode.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
+
+                            <div className="flex items-center space-x-2">
+                                <Filter className="w-4 h-4 text-slate-400" />
+                                <select className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-700 dark:text-slate-200" value={filterPhase} onChange={(e) => setFilterPhase(e.target.value)}>
+                                    <option value="All">All Phases</option>
+                                    {phases.map(p => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                            </div>
+
+                            <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors">
+                                {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* --- MAIN WORKSPACE --- */}
+                    <div id="main-workspace" className="flex flex-1 overflow-hidden bg-slate-50 dark:bg-slate-900 transition-colors relative" ref={exportTargetRef}>
+
+                        {layoutView === 'Gantt' && (
+                            <>
+                                {/* LEFT PANEL */}
+                                <div id="pdf-left-panel" style={{ width: panelWidth }} className="flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-[4px_0_24px_rgba(0,0,0,0.02)] z-20 relative transition-colors flex flex-col overflow-hidden">
+                                    <div className="absolute top-0 right-0 bottom-0 w-1.5 bg-transparent hover:bg-indigo-300 dark:hover:bg-indigo-600 cursor-col-resize z-50" onMouseDown={(e) => { e.preventDefault(); setResizingPanel(true); }} />
+
+                                    <div className="w-full flex-1 overflow-x-auto overflow-y-auto relative">
+                                        <div id="pdf-left-inner" style={{ minWidth: tableInnerWidth }} className="w-full">
+
+                                            {/* Grid Header */}
+                                            <div className="flex bg-slate-50 dark:bg-slate-800/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider py-3 sticky top-0 z-30 shadow-sm">
+                                                <div className="w-8 flex-shrink-0"></div>
+                                                {['name', 'party', 'duration', 'start', 'end'].map(col => (
+                                                    <div key={col} style={{ width: colWidths[col] }} className="px-3 relative flex items-center flex-shrink-0">
+                                                        {col === 'name' ? 'Task Name' : col === 'party' ? 'Party' : col === 'duration' ? `Dur (${durationUnit})` : col === 'start' ? 'Start Date' : 'End Date'}
+                                                        <div className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-300 dark:hover:bg-indigo-600 z-10 -mr-1 transition-colors" onMouseDown={(e) => { e.preventDefault(); setResizingCol({ col, startX: e.clientX, startWidth: colWidths[col] }); }} />
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            {/* Body */}
+                                            {visiblePhases.map(phase => {
+                                                const isExpanded = expandedPhases[phase];
+                                                const pBounds = phaseBounds[phase];
+                                                let phaseDisplayDur = 0;
+                                                if (pBounds) {
+                                                    const dur = getDurationBetweenDates(pBounds.minS, pBounds.maxE, durationType);
+                                                    phaseDisplayDur = durationUnit === 'Weeks' ? Math.ceil(dur / (durationType === 'Business' ? 5 : 7)) : dur;
+                                                }
+
+                                                return (
+                                                    <div key={phase} className="mb-1">
+                                                        <div
+                                                            draggable
+                                                            onDragStart={(e) => { e.dataTransfer.setData('type', 'phase'); setDraggedItem({ type: 'phase', id: phase }); }}
+                                                            onDragOver={(e) => { e.preventDefault(); setDragOverTarget(phase); }}
+                                                            onDragLeave={() => setDragOverTarget(null)}
+                                                            onDrop={(e) => handleItemDrop(e, phase, 'phase', phase)}
+                                                            className={`flex items-center h-10 bg-white dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700/50 group transition-colors hover:bg-slate-50 dark:hover:bg-slate-750 cursor-grab ${dragOverTarget === phase ? 'border-t-2 border-t-indigo-500' : ''}`}
+                                                            onClick={() => setExpandedPhases(p => ({ ...p, [phase]: !p[phase] }))}
+                                                        >
+                                                            <div className="w-8 flex justify-center text-slate-400 flex-shrink-0 relative">
+                                                                {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                            </div>
+
+                                                            <div style={{ width: colWidths.name }} className="px-2 flex items-center flex-shrink-0">
+                                                                <input type="color" value={phaseColors[phase] || '#94a3b8'} onChange={(e) => { e.stopPropagation(); const val = e.target.value; updateVersion(null, null, prev => ({ ...prev, [phase]: val })); }} onClick={(e) => e.stopPropagation()} className="w-4 h-4 p-0 border-0 rounded cursor-pointer mr-2 bg-transparent shadow-sm flex-shrink-0" />
+                                                                <span className="font-bold text-sm text-slate-800 dark:text-slate-200 truncate pr-2">{phase}</span>
+                                                                <button onClick={(e) => { e.stopPropagation(); handleDeletePhase(phase); }} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 rounded transition-all ml-auto mr-1"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                                <button onClick={(e) => { e.stopPropagation(); addTask(phase); setExpandedPhases(p => ({ ...p, [phase]: true })); }} className="opacity-0 group-hover:opacity-100 p-1 bg-indigo-50 dark:bg-indigo-900/50 hover:bg-indigo-100 dark:hover:bg-indigo-800 text-indigo-600 dark:text-indigo-400 rounded transition-all"><Plus className="w-3.5 h-3.5" /></button>
+                                                            </div>
+
+                                                            <div style={{ width: colWidths.party }} className="px-2 flex-shrink-0"></div>
+                                                            <div style={{ width: colWidths.duration }} className="px-2 text-center flex-shrink-0 text-xs font-semibold text-slate-400 bg-slate-50 dark:bg-slate-900/50 py-1 rounded">{phaseDisplayDur}</div>
+                                                            <div style={{ width: colWidths.start }} className="px-2 pr-4 flex-shrink-0 text-xs font-semibold text-slate-400">{pBounds ? pBounds.minS : ''}</div>
+                                                            <div style={{ width: colWidths.end }} className="px-2 pr-4 flex-shrink-0 text-xs font-semibold text-slate-400">{pBounds ? pBounds.maxE : ''}</div>
+                                                        </div>
+
+                                                        {isExpanded && tasksByPhase[phase] && tasksByPhase[phase].map(task => {
+                                                            const taskWarning = isNonWorkingDay(task.start, durationType);
+                                                            const displayDur = durationUnit === 'Weeks' ? Math.ceil(task.duration / (durationType === 'Business' ? 5 : 7)) : task.duration;
+                                                            const endDateStr = calculateEndDate(task.start, task.duration, durationType);
+
+                                                            const mType = task.milestone || 0;
+                                                            const flagColor = mType === 2 ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : mType === 1 ? 'text-amber-500 bg-amber-50 dark:bg-amber-900/20' : 'text-slate-300 dark:text-slate-600 hover:text-slate-500 opacity-0 group-hover:opacity-100';
+                                                            const nameColor = mType === 2 ? 'font-extrabold text-emerald-700 dark:text-emerald-400' : mType === 1 ? 'font-bold text-slate-900 dark:text-slate-100' : 'font-medium text-slate-700 dark:text-slate-300';
+
+                                                            return (
+                                                                <div
+                                                                    key={task.id}
+                                                                    draggable
+                                                                    onDragStart={(e) => { e.dataTransfer.setData('type', 'task'); setDraggedItem({ type: 'task', id: task.id }); }}
+                                                                    onDragOver={(e) => { e.preventDefault(); setDragOverTarget(task.id); }}
+                                                                    onDragLeave={() => setDragOverTarget(null)}
+                                                                    onDrop={(e) => handleItemDrop(e, task.id, 'task', phase)}
+                                                                    className={`flex items-center border-b border-slate-50 dark:border-slate-700/30 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 group text-sm h-[44px] transition-colors cursor-grab ${dragOverTarget === task.id ? 'border-t-2 border-t-indigo-500 bg-indigo-50/10 dark:bg-indigo-900/20' : ''}`}
+                                                                >
+                                                                    <div className="w-8 flex items-center justify-center flex-shrink-0">
+                                                                        <button onClick={() => deleteTask(task.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-opacity absolute ml-6 z-10 bg-white dark:bg-slate-800 rounded shadow-sm p-0.5 border border-slate-100 dark:border-slate-700"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                                    </div>
+                                                                    <div style={{ width: colWidths.name }} className="px-2 flex-shrink-0">
+                                                                        <div className="flex items-center">
+                                                                            <button onClick={() => cycleMilestone(task.id)} className={`flex-shrink-0 p-1 rounded-md transition-colors ${flagColor}`} title="Toggle Milestone"><Flag className="w-3.5 h-3.5" /></button>
+                                                                            <input type="text" value={task.name} onChange={(e) => handleTaskChange(task.id, 'name', e.target.value)} className={`w-full bg-transparent border-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded px-1.5 py-1 transition-all ${nameColor}`} />
+                                                                        </div>
+                                                                    </div>
+                                                                    <div style={{ width: colWidths.party }} className="px-2 flex-shrink-0">
+                                                                        <select value={task.party} onChange={(e) => handleTaskChange(task.id, 'party', e.target.value)} className="w-full bg-transparent border-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs text-slate-500 dark:text-slate-400 font-medium cursor-pointer">
+                                                                            <option value="All">All</option>
+                                                                            {PARTIES.map(p => <option key={p} value={p}>{p}</option>)}
+                                                                        </select>
+                                                                    </div>
+                                                                    <div style={{ width: colWidths.duration }} className="px-2 text-center flex-shrink-0">
+                                                                        <input type="number" min="0" value={displayDur} onChange={(e) => handleTaskChange(task.id, 'duration', durationUnit === 'Weeks' ? (parseInt(e.target.value) || 0) * (durationType === 'Business' ? 5 : 7) : parseInt(e.target.value) || 0)} disabled={mType > 0} className={`w-full text-center bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded py-1 disabled:opacity-30 font-semibold ${mType > 0 ? 'text-slate-300 dark:text-slate-600' : 'text-slate-700 dark:text-slate-200'}`} />
+                                                                    </div>
+                                                                    <div style={{ width: colWidths.start }} className="px-2 pr-4 flex-shrink-0 relative">
+                                                                        <input type="date" value={task.start} onChange={(e) => handleTaskChange(task.id, 'start', e.target.value)} className={`w-full bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs py-1 transition-colors cursor-text ${taskWarning ? 'text-red-600 dark:text-red-400 font-bold' : 'text-slate-600 dark:text-slate-300 font-medium'}`} />
+                                                                        {taskWarning && <AlertCircle className="w-3.5 h-3.5 text-red-500 absolute right-6 top-1.5 pointer-events-none" title="Starts on a Non-Working Day" />}
+                                                                    </div>
+                                                                    <div style={{ width: colWidths.end }} className="px-2 pr-4 flex-shrink-0 relative">
+                                                                        <input type="date" value={endDateStr} onChange={(e) => { if (isValidDateStr(e.target.value)) handleTaskChange(task.id, 'duration', getDurationBetweenDates(task.start, e.target.value, durationType)); }} disabled={mType > 0} className="w-full bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs py-1 transition-colors cursor-text text-slate-600 dark:text-slate-300 font-medium disabled:opacity-50" />
+                                                                    </div>
+                                                                </div>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] transition-colors w-full">
+                                        <form onSubmit={(e) => { e.preventDefault(); const p = newPhaseName.trim(); if (p && !phases.includes(p)) { updateVersion(null, prev => [...prev, p], prevColors => ({ ...prevColors, [p]: '#64748b' })); setExpandedPhases({ ...expandedPhases, [p]: true }); setNewPhaseName(''); } }} className="flex items-center space-x-2">
+                                            <input type="text" value={newPhaseName} onChange={(e) => setNewPhaseName(e.target.value)} placeholder="Create a new phase..." className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm font-medium rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-slate-800 dark:text-slate-100" />
+                                            <button type="submit" className="bg-indigo-50 dark:bg-indigo-900/50 hover:bg-indigo-100 dark:hover:bg-indigo-800 text-indigo-600 dark:text-indigo-400 font-bold p-2 rounded-md transition-colors"><Plus className="w-5 h-5" /></button>
+                                        </form>
+                                    </div>
+                                </div>
+
+                                {/* RIGHT PANEL: Gantt Chart */}
+                                <div id="timeline-container" className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative transition-colors" ref={timelineContainerRef}>
+                                    <div id="pdf-right-inner" style={{ width: `${totalDays * dayWidth}px`, minHeight: '100%' }} className="relative">
+                                        <div className="sticky top-0 z-40 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 shadow-sm transition-colors">
+                                            <div className="h-8 relative border-b border-slate-100 dark:border-slate-700/50 bg-slate-50 dark:bg-slate-800/80">
+                                                {timelineHeaders.months.map((m, i) => (
+                                                    <div key={i} className="absolute top-0 bottom-0 px-2 py-1 text-xs font-bold text-slate-800 dark:text-slate-200 border-l-2 border-slate-400 dark:border-slate-500 overflow-hidden whitespace-nowrap" style={{ left: `${m.start * dayWidth}px`, width: `${m.width * dayWidth}px`, marginLeft: i === 0 ? 0 : '-1px' }}>
+                                                        {m.name}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="h-8 relative bg-white dark:bg-slate-800 overflow-hidden">
+                                                {timelineHeaders.weeks.map((w, i) => (
+                                                    <div key={i} className="absolute top-0 bottom-0 text-[10px] font-semibold text-slate-500 dark:text-slate-400 px-1.5 border-l border-slate-300 dark:border-slate-600 flex items-center group" style={{ left: `${w.dayOffset * dayWidth}px`, width: `${7 * dayWidth}px` }}>
+                                                        {dayWidth > 10 ? `${w.date.getUTCDate()} ${w.date.toLocaleString('default', { month: 'short', timeZone: 'UTC' })}` : ''}
+                                                        <div className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-400 dark:hover:bg-indigo-500 z-50 -mr-1 opacity-0 group-hover:opacity-100 transition-opacity" onMouseDown={(e) => { e.preventDefault(); setResizingTimeline({ startX: e.clientX, startDayWidth: dayWidth }); }} />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="absolute top-16 left-0 right-0 bottom-0 pointer-events-none">
+                                            {timelineHeaders.days.map((d, i) => {
+                                                let bg = 'bg-transparent';
+                                                if (d.isHoliday) bg = 'bg-rose-50/60 dark:bg-rose-900/20';
+                                                else if (d.isWeekend) bg = 'bg-slate-50/80 dark:bg-slate-800/50';
+                                                const isStartOfWeek = d.date.getUTCDay() === 1;
+                                                const isStartOfMonth = d.date.getUTCDate() === 1;
+                                                let borderClass = 'border-l border-slate-100 dark:border-slate-800/50';
+                                                if (isStartOfMonth) borderClass = 'border-l-2 border-slate-400 dark:border-slate-500 z-10 relative';
+                                                else if (isStartOfWeek) borderClass = 'border-l border-slate-300 dark:border-slate-600';
+                                                return (
+                                                    <div key={i} className={`absolute top-0 bottom-0 ${borderClass} ${bg}`} style={{ left: `${i * dayWidth}px`, width: `${dayWidth}px`, marginLeft: (isStartOfMonth && i !== 0) ? '-1px' : '0' }}>
+                                                        {dayWidth > 30 && <div className="text-[9px] text-slate-300 dark:text-slate-600 text-center mt-1 font-medium">{d.date.getUTCDate()}</div>}
+                                                    </div>
+                                                )
+                                            })}
+                                            {/* Current Day Line */}
+                                            {showTodayLine && (
+                                                <div className="absolute top-0 bottom-0 w-[2px] bg-red-500/80 dark:bg-red-500/80 z-40 transition-colors" style={{ left: `${todayOffsetDays * dayWidth}px` }} title="Today" />
+                                            )}
+                                        </div>
+
+                                        {linkingState && (
+                                            <svg className="absolute top-[64px] left-0 w-full h-[calc(100%-64px)] pointer-events-none z-50">
+                                                <path d={`M ${linkingState.startX},${linkingState.startY} C ${linkingState.startX + 50},${linkingState.startY} ${linkingState.currentX - 50},${linkingState.currentY} ${linkingState.currentX},${linkingState.currentY}`} stroke="#6366f1" strokeWidth="2" fill="none" strokeDasharray="4 4" />
+                                                <circle cx={linkingState.currentX} cy={linkingState.currentY} r="4" fill="#6366f1" />
+                                            </svg>
+                                        )}
+
+                                        <svg className="absolute top-[64px] left-0 w-full h-[calc(100%-64px)] pointer-events-none z-10">
+                                            {tasks.map(task => task.deps.map(depId => {
+                                                const depCoords = taskCoordinates[depId];
+                                                const taskCoords = taskCoordinates[task.id];
+                                                if (!depCoords || !taskCoords) return null;
+                                                const x1 = depCoords.endX; const y1 = depCoords.y;
+                                                const x2 = taskCoords.startX; const y2 = taskCoords.y;
+                                                const path = `M ${x1},${y1} C ${x1 + 15},${y1} ${x2 - 15},${y2} ${x2},${y2}`;
+                                                return <path key={`${depId}-${task.id}`} d={path} stroke={isDarkMode ? '#475569' : '#cbd5e1'} strokeWidth="2" fill="none" className="pointer-events-auto cursor-pointer hover:stroke-red-400 dark:hover:stroke-red-500 transition-colors" onClick={() => linkTasks(depId, task.id)} title="Click to remove dependency" />;
+                                            }))}
+                                        </svg>
+
+                                        <div className="pt-0">
+                                            {visiblePhases.map(phase => {
+                                                const isExpanded = expandedPhases[phase];
+                                                const pBounds = phaseBounds[phase];
+                                                return (
+                                                    <div
+                                                        key={phase}
+                                                        className={`mb-0 ${dragOverTarget === phase ? 'border-t-2 border-t-indigo-500 bg-indigo-50/10' : ''}`}
+                                                        draggable
+                                                        onDragStart={(e) => { e.dataTransfer.setData('type', 'phase'); setDraggedItem({ type: 'phase', id: phase }); }}
+                                                        onDragOver={(e) => { e.preventDefault(); setDragOverTarget(phase); }}
+                                                        onDragLeave={() => setDragOverTarget(null)}
+                                                        onDrop={(e) => handleItemDrop(e, phase, 'phase', phase)}
+                                                    >
+                                                        <div className="h-10 border-b border-slate-100 dark:border-slate-800 relative flex items-center">
+                                                            {pBounds && (
+                                                                <div
+                                                                    className={`absolute h-1.5 rounded-full ${dragPhaseState?.phase === phase ? 'opacity-90 dark:opacity-80' : 'opacity-60 dark:opacity-40'} cursor-move hover:h-2 transition-all`}
+                                                                    style={{
+                                                                        left: `${(pBounds.offStart + (dragPhaseState?.phase === phase ? dragPhaseState.currentDelta : 0)) * dayWidth}px`,
+                                                                        width: `${pBounds.width}px`,
+                                                                        backgroundColor: phaseColors[phase] || '#94a3b8'
+                                                                    }}
+                                                                    onMouseDown={(e) => {
+                                                                        e.preventDefault();
+                                                                        e.stopPropagation();
+                                                                        setDragPhaseState({ phase: phase, startX: e.clientX, currentDelta: 0 });
+                                                                    }}
+                                                                    title="Drag to shift entire phase"
+                                                                />
+                                                            )}
+                                                        </div>
+                                                        {isExpanded && tasksByPhase[phase] && tasksByPhase[phase].map(task => {
+                                                            const mType = task.milestone || 0;
+                                                            const isMilestone = mType > 0;
+                                                            const endDateStr = calculateEndDate(task.start, task.duration, durationType);
+                                                            const color = phaseColors[task.phase] || '#94a3b8';
+                                                            const displayDur = durationUnit === 'Weeks' ? Math.ceil(task.duration / (durationType === 'Business' ? 5 : 7)) : task.duration;
+
+                                                            let segments = [];
+                                                            if (viewMode === 'Business' && !isMilestone) {
+                                                                let currentSegStart = null;
+                                                                let current = parseDate(task.start);
+                                                                const endD = parseDate(endDateStr);
+                                                                while (current <= endD) {
+                                                                    const dStr = current.toISOString().split('T')[0];
+                                                                    if (!isNonWorkingDay(dStr, 'Business')) {
+                                                                        if (!currentSegStart) currentSegStart = dStr;
+                                                                    } else {
+                                                                        if (currentSegStart) { segments.push({ start: currentSegStart, end: addDays(dStr, -1) }); currentSegStart = null; }
+                                                                    }
+                                                                    current.setUTCDate(current.getUTCDate() + 1);
+                                                                }
+                                                                if (currentSegStart) segments.push({ start: currentSegStart, end: endDateStr });
+                                                            } else {
+                                                                segments.push({ start: task.start, end: endDateStr });
+                                                            }
+
+                                                            const msClass = mType === 2 ? 'bg-emerald-500 border-emerald-200 dark:border-emerald-900' : 'bg-amber-400 border-white dark:border-slate-900';
+                                                            const labelClass = mType === 2 ? 'font-extrabold text-emerald-700 dark:text-emerald-400' : mType === 1 ? 'font-bold text-slate-800 dark:text-slate-200' : 'font-bold text-slate-700 dark:text-slate-200';
+
+                                                            return (
+                                                                <div
+                                                                    key={task.id}
+                                                                    draggable
+                                                                    onDragStart={(e) => { e.dataTransfer.setData('type', 'task'); setDraggedItem({ type: 'task', id: task.id }); }}
+                                                                    onDragOver={(e) => { e.preventDefault(); setDragOverTarget(task.id); }}
+                                                                    onDragLeave={() => setDragOverTarget(null)}
+                                                                    onDrop={(e) => handleItemDrop(e, task.id, 'task', phase)}
+                                                                    className={`h-[44px] relative flex items-center group border-b border-transparent hover:bg-slate-100/30 dark:hover:bg-slate-800/50 task-bar-hitbox transition-colors cursor-grab ${dragOverTarget === task.id ? 'border-t-2 border-t-indigo-500 bg-indigo-50/10' : ''}`}
+                                                                    data-taskid={task.id}
+                                                                >
+                                                                    {segments.length > 1 && (
+                                                                        <div className="absolute h-6 rounded-md opacity-20 dark:opacity-30 pointer-events-none" style={{ left: `${diffDays(timelineBounds.start.toISOString().split('T')[0], segments[0].start) * dayWidth}px`, width: `${(diffDays(timelineBounds.start.toISOString().split('T')[0], segments[segments.length - 1].end) - diffDays(timelineBounds.start.toISOString().split('T')[0], segments[0].start) + 1) * dayWidth}px`, backgroundColor: color }} />
+                                                                    )}
+                                                                    {segments.map((seg, i) => {
+                                                                        const segOffsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.start);
+                                                                        const segEndOffsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.end);
+                                                                        const segLeftPos = isMilestone ? (segOffsetDays * dayWidth) + (dayWidth / 2) - 10 : segOffsetDays * dayWidth;
+                                                                        const segBarWidth = isMilestone ? 20 : (segEndOffsetDays - segOffsetDays + 1) * dayWidth;
+                                                                        const isFirst = i === 0; const isLast = i === segments.length - 1;
+
+                                                                        return (
+                                                                            <React.Fragment key={`${task.id}-seg-${i}`}>
+                                                                                {isFirst && !isMilestone && <div className="absolute h-6 w-3 z-30 cursor-w-resize -ml-1.5 opacity-0 group-hover:opacity-100" style={{ left: `${segLeftPos}px` }} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragTaskState({ type: 'left', taskId: task.id, startX: e.clientX, originalStartStr: task.start, originalEndStr: endDateStr, currentStartStr: task.start, currentDuration: task.duration }); }} />}
+                                                                                <div onMouseDown={(e) => { e.preventDefault(); setDragTaskState({ type: 'center', taskId: task.id, startX: e.clientX, originalStartStr: task.start, currentStartStr: task.start }); }} className={`absolute flex items-center justify-center shadow-sm cursor-move transition-all hover:brightness-110 z-20 ${isMilestone ? `h-5 w-5 rotate-45 border-2 ${msClass}` : 'h-6 rounded-md border border-black/10 dark:border-white/10'}`} style={{ left: `${segLeftPos}px`, width: `${segBarWidth}px`, backgroundColor: isMilestone ? undefined : color }} />
+                                                                                {isLast && !isMilestone && <div className="absolute h-6 w-3 z-30 cursor-e-resize -mr-1.5 opacity-0 group-hover:opacity-100" style={{ left: `${segLeftPos + segBarWidth}px` }} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragTaskState({ type: 'right', taskId: task.id, startX: e.clientX, originalStartStr: task.start, originalEndStr: endDateStr, currentDuration: task.duration }); }} />}
+                                                                                {isLast && (
+                                                                                    <div className="absolute h-4 w-4 bg-white dark:bg-slate-800 border-2 border-indigo-500 rounded-full z-40 cursor-crosshair opacity-0 group-hover:opacity-100 shadow-sm flex items-center justify-center transition-opacity" style={{ left: `${segLeftPos + segBarWidth + 6}px` }} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const container = timelineContainerRef.current; const rect = container.getBoundingClientRect(); const startX = e.clientX - rect.left + container.scrollLeft; const startY = (e.clientY - rect.top + container.scrollTop) - 64; setLinkingState({ sourceId: task.id, startX, startY, currentX: startX, currentY: startY }); }} title="Drag to link to another task">
+                                                                                        <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full"></div>
+                                                                                    </div>
+                                                                                )}
+                                                                                {isLast && (
+                                                                                    <div className={`absolute whitespace-nowrap text-xs z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity ${labelClass}`} style={{ left: `${segLeftPos + (isMilestone ? 32 : segBarWidth + 28)}px` }}>
+                                                                                        <span className="bg-white/95 dark:bg-slate-800/95 px-2 py-1 rounded-md shadow-sm border border-slate-200 dark:border-slate-700 backdrop-blur-sm">
+                                                                                            {task.name} {!isMilestone && `(${displayDur}${durationUnit.charAt(0)})`}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                )}
+                                                                            </React.Fragment>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {/* --- TIMELINE VIEW --- */}
+                        {layoutView === 'Timeline' && (
+                            <div id="pdf-timeline-view" className="flex-1 w-full h-full overflow-auto bg-slate-50 dark:bg-slate-900 p-8 flex flex-col items-center relative">
+                                <div id="pdf-timeline-inner" className="w-full max-w-5xl bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-8">
+                                    <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-12 text-center">{activeProject.name} - {activeVersion.name}</h2>
+
+                                    <div className="relative w-full pt-36 pb-16 px-4">
+                                        {/* Timeline Bar & Date Markers */}
+                                        <div className="absolute top-32 left-0 right-0">
+                                            <div className="absolute top-0 left-0 right-0 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full shadow-inner" />
+                                            {/* Week Markers */}
+                                            {timelineHeaders.weeks.map((w, i) => (
+                                                <div key={`w-${i}`} className="absolute top-0 w-[2px] h-2.5 bg-slate-300 dark:bg-slate-600 -mt-[2px] rounded-full" style={{ left: `${(w.dayOffset / totalDays) * 100}%` }} title={`Week of ${formatShortDate(w.date.toISOString().split('T')[0])}`} />
+                                            ))}
+                                            {/* Month Markers & Labels */}
+                                            {timelineHeaders.months.map((m, i) => {
+                                                const percent = (m.start / totalDays) * 100;
+                                                const nameParts = m.name.split(' ');
+                                                const shortName = nameParts[0].substring(0, 3) + (nameParts.length > 1 ? ` '${nameParts[1].substring(2)}` : '');
+                                                return (
+                                                    <div key={`m-${i}`} className="absolute top-0 flex flex-col items-center z-10" style={{ left: `${percent}%` }}>
+                                                        <div className="w-[3px] h-4 bg-slate-400 dark:bg-slate-500 -mt-[5px] rounded-full shadow-sm" />
+                                                        <span className="text-[10px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 mt-2 absolute top-4 whitespace-nowrap bg-white/80 dark:bg-slate-800/80 px-1.5 py-0.5 rounded backdrop-blur-sm shadow-sm border border-white/40 dark:border-slate-700/40">{shortName}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {/* Milestones Top */}
+                                        {filteredTasks.filter(t => t.milestone > 0).map((m, i) => {
+                                            const offsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], m.start);
+                                            const percent = Math.max(0, Math.min(100, (offsetDays / totalDays) * 100));
+                                            const isOwner = m.milestone === 2;
+                                            const colorClass = isOwner ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' : 'bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400 border-amber-200 dark:border-amber-800';
+                                            const height = isOwner ? 90 : 45;
+
+                                            return (
+                                                <div key={m.id} className="absolute flex flex-col items-center z-20 hover:z-30 transition-all hover:-translate-y-1" style={{ left: `calc(${percent}% - 2px)`, bottom: 'calc(100% - 128px - 4px)' }}>
+                                                    <div className={`whitespace-nowrap text-xs mb-1 px-3 py-1.5 flex flex-col items-center rounded-lg border shadow-sm backdrop-blur-sm ${isOwner ? 'font-extrabold' : 'font-bold'} ${colorClass}`}>
+                                                        <span>{m.name}</span>
+                                                    </div>
+                                                    <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-2 bg-white/90 dark:bg-slate-800/90 px-1.5 py-0.5 rounded shadow-sm border border-slate-100 dark:border-slate-700">{formatDayMonth(m.start)}</div>
+                                                    <div className={`w-[2px] ${isOwner ? 'bg-emerald-400 dark:bg-emerald-600' : 'bg-amber-300 dark:bg-amber-600'}`} style={{ height: `${height}px` }} />
+                                                    <div className={`w-3.5 h-3.5 rotate-45 border-[3px] border-white dark:border-slate-800 -mb-1.5 shadow-md ${isOwner ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+                                                </div>
+                                            )
+                                        })}
+
+                                        {/* Timeline Items Bottom */}
+                                        <div className="mt-8 relative w-full" style={{ height: `${timelineItems.totalHeight}px` }}>
+                                            {timelineItems.items.map((item, i) => {
+                                                if (item.type === 'phase') {
+                                                    const phaseDur = diffDays(item.bounds.minS, item.bounds.maxE);
+                                                    return (
+                                                        <div key={`p-${item.phase}`} className="absolute h-6 rounded-md shadow-sm flex items-center px-3" style={{ left: `${item.left}%`, width: `${item.width}%`, top: `${item.y}px`, backgroundColor: phaseColors[item.phase] || '#94a3b8' }}>
+                                                            <span className="absolute -top-4 left-0 text-[10px] font-bold text-slate-400 dark:text-slate-500 whitespace-nowrap">{formatDayMonth(item.bounds.minS)}</span>
+                                                            <span className="text-[10px] font-bold text-white truncate drop-shadow-sm">{item.phase}</span>
+                                                            {phaseDur > 21 && <span className="absolute -top-4 right-0 text-[10px] font-bold text-slate-400 dark:text-slate-500 whitespace-nowrap">{formatDayMonth(item.bounds.maxE)}</span>}
+                                                        </div>
+                                                    );
+                                                } else if (item.type === 'task') {
+                                                    return (
+                                                        <div key={`t-${item.task.id}`} className="absolute h-4 rounded-sm shadow-sm flex items-center px-2 opacity-90" style={{ left: `${item.left}%`, width: `${item.width}%`, top: `${item.y}px`, backgroundColor: phaseColors[item.phase] || '#94a3b8' }}>
+                                                            <span className="text-[9px] font-bold text-white truncate">{item.task.name}</span>
+                                                        </div>
+                                                    );
+                                                }
+                                                return null;
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* --- RENAME MODAL --- */}
+                    {renameModal && (
+                        <div className="fixed inset-0 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+                            <form onSubmit={handleRenameSubmit} className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all">
+                                <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                                    <h2 className="text-base font-bold text-slate-800 dark:text-white">Rename {renameModal.type === 'project' ? 'Project' : 'Version'}</h2>
+                                    <button type="button" onClick={() => setRenameModal(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
+                                </div>
+                                <div className="p-5 space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Name</label>
+                                        <input autoFocus type="text" value={renameModal.name} onChange={(e) => setRenameModal({ ...renameModal, name: e.target.value })} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100" />
+                                    </div>
+                                    {renameModal.type === 'project' && (
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Client Name (Optional)</label>
+                                            <input type="text" value={renameModal.clientName || ''} onChange={(e) => setRenameModal({ ...renameModal, clientName: e.target.value })} placeholder="e.g. Acme Corp" className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex justify-end space-x-2">
+                                    <button type="button" onClick={() => setRenameModal(null)} className="px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md">Cancel</button>
+                                    <button type="submit" className="px-3 py-1.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md">Save</button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+
+                    {/* --- SHIFT MODAL --- */}
+                    {showShiftModal && (
+                        <div className="fixed inset-0 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+                            <form onSubmit={handleShiftSubmit} className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all">
+                                <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                                    <h2 className="text-base font-bold text-slate-800 dark:text-white flex items-center"><CalendarDays className="w-5 h-5 mr-2 text-indigo-500" /> Shift Schedule</h2>
+                                    <button type="button" onClick={() => setShowShiftModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-full"><X className="w-4 h-4" /></button>
+                                </div>
+                                <div className="p-5 space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Target Scope</label>
+                                        <select value={shiftTarget} onChange={(e) => setShiftTarget(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100 transition-colors">
+                                            <option value="All">Entire Project</option>
+                                            {phases.map(p => <option key={p} value={p}>Phase: {p}</option>)}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Shift Method</label>
+                                        <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700 shadow-inner">
+                                            <button type="button" onClick={() => setShiftMode('days')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${shiftMode === 'days' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}>By Days</button>
+                                            <button type="button" onClick={() => {
+                                                setShiftMode('date');
+                                                // Pre-fill shift date with earliest date of target
+                                                let earliestStr = null;
+                                                tasks.forEach(t => {
+                                                    if (shiftTarget === 'All' || t.phase === shiftTarget) {
+                                                        if (!earliestStr || t.start < earliestStr) earliestStr = t.start;
+                                                    }
+                                                });
+                                                if (earliestStr) setShiftDate(earliestStr);
+                                            }} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${shiftMode === 'date' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}>To Specific Date</button>
+                                        </div>
+                                    </div>
+
+                                    {shiftMode === 'days' ? (
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Days to Shift</label>
+                                            <input autoFocus type="number" value={shiftDays} onChange={(e) => setShiftDays(e.target.value)} placeholder="e.g. 14 or -7" className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100 transition-colors" />
+                                            <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400 leading-tight">Positive numbers push the schedule out. Negative numbers pull it forward. Dependencies will be automatically adjusted.</p>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">New Start Date</label>
+                                            <input autoFocus type="date" value={shiftDate} onChange={(e) => setShiftDate(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100 transition-colors" />
+                                            <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400 leading-tight">Adjusts the earliest item in the {shiftTarget === 'All' ? 'project' : 'phase'} to this date and shifts everything else relative to it.</p>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex justify-end space-x-2 transition-colors">
+                                    <button type="button" onClick={() => setShowShiftModal(false)} className="px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+                                    <button type="submit" className="px-3 py-1.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors">Apply Shift</button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+
+                    {/* --- EXPORT MODAL --- */}
+                    {showExportModal && (
+                        <div className="fixed inset-0 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                                <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+                                    <h2 className="text-lg font-bold text-slate-800 dark:text-white flex items-center"><Download className="w-5 h-5 mr-2 text-indigo-500" /> Export Options</h2>
+                                    <button onClick={() => setShowExportModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"><X className="w-5 h-5" /></button>
+                                </div>
+
+                                <div className="p-6 space-y-4">
+                                    <button onClick={exportPDF} disabled={isExporting} className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 shadow-sm transition-all group disabled:opacity-50">
+                                        <div className="flex items-center">
+                                            {isExporting ? <Loader2 className="w-5 h-5 mr-3 text-indigo-500 animate-spin" /> : <FileText className="w-5 h-5 mr-3 text-slate-400 group-hover:text-indigo-500 transition-colors" />}
+                                            {layoutView === 'Timeline' ? 'Timeline PDF (Vector)' : 'Gantt Chart PDF (Vector)'}
+                                        </div>
+                                        <ChevronRight className="w-4 h-4 opacity-50" />
+                                    </button>
+
+                                    <button onClick={exportExcelGantt} className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 shadow-sm transition-all group">
+                                        <div className="flex items-center"><FileSpreadsheet className="w-5 h-5 mr-3 text-slate-400 group-hover:text-emerald-500 transition-colors" /> Excel (.xls) Gantt Data</div>
+                                        <ChevronRight className="w-4 h-4 opacity-50" />
+                                    </button>
+
+                                    <button onClick={exportCSV} className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 shadow-sm transition-all group">
+                                        <div className="flex items-center"><FileSpreadsheet className="w-5 h-5 mr-3 text-slate-400 group-hover:text-emerald-500 transition-colors" /> Simple CSV Data</div>
+                                        <ChevronRight className="w-4 h-4 opacity-50" />
+                                    </button>
+
+                                    <button onClick={exportMilestoneICS} className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 shadow-sm transition-all group">
+                                        <div className="flex items-center"><Calendar className="w-5 h-5 mr-3 text-slate-400 group-hover:text-amber-500 transition-colors" /> Export Milestones to Outlook (.ics)</div>
+                                        <ChevronRight className="w-4 h-4 opacity-50" />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
