@@ -131,6 +131,7 @@
         const LayoutDashboard = (p) => <Icon name="layout-dashboard" {...p} />;
         const Loader2 = (p) => <Icon name="loader-2" {...p} />;
         const ListTree = (p) => <Icon name="list-tree" {...p} />;
+        const Eye = (p) => <Icon name="eye" {...p} />;
 
         // --- Date Utilities ---
         const parseDate = (str) => new Date(str + 'T12:00:00Z');
@@ -301,7 +302,7 @@
 
         function App() {
             const [viewMode, setViewMode] = useState(() => localStorage.getItem('archiViewMode') || 'Business');
-            const durationType = viewMode === 'Days' ? 'Calendar' : 'Business';
+            const durationType = 'Business'; // Core engine always uses Business days to prevent destructive schedule shifts
 
             const [projects, setProjects] = useState(() => {
                 try {
@@ -319,9 +320,19 @@
             const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('archiDarkMode') === 'true');
             const [layoutView, setLayoutView] = useState(() => localStorage.getItem('archiLayout') || 'Gantt');
             const [showTimelineTasks, setShowTimelineTasks] = useState(() => localStorage.getItem('archiShowTasks') === 'true');
+            const [alwaysShowTaskNames, setAlwaysShowTaskNames] = useState(() => localStorage.getItem('archiShowNames') === 'true');
 
             const [showExportModal, setShowExportModal] = useState(false);
             const [isExporting, setIsExporting] = useState(false);
+
+            const [showViewModal, setShowViewModal] = useState(false);
+            const [rowHeight, setRowHeight] = useState(() => parseInt(localStorage.getItem('archiRowHeight')) || 30);
+            const [textSize, setTextSize] = useState(() => parseInt(localStorage.getItem('archiTextSize')) || 13);
+            const [columnVisibility, setColumnVisibility] = useState(() => {
+                try { const s = localStorage.getItem('archiColVis'); if (s) return JSON.parse(s); } catch (e) { }
+                return { party: true, duration: true, start: true, end: true };
+            });
+            const [pdfPaperSize, setPdfPaperSize] = useState(() => localStorage.getItem('archiPdfSize') || 'letter');
 
             const [contextMenu, setContextMenu] = useState(null); // { x, y, taskId }
             const [renameModal, setRenameModal] = useState(null);
@@ -345,6 +356,12 @@
             useEffect(() => { localStorage.setItem('archiLayout', layoutView); }, [layoutView]);
             useEffect(() => { localStorage.setItem('archiViewMode', viewMode); }, [viewMode]);
             useEffect(() => { localStorage.setItem('archiShowTasks', showTimelineTasks); }, [showTimelineTasks]);
+            useEffect(() => { localStorage.setItem('archiShowNames', alwaysShowTaskNames); }, [alwaysShowTaskNames]);
+            useEffect(() => { localStorage.setItem('archiExpandedPhases', JSON.stringify(expandedPhases)); }, [expandedPhases]);
+            useEffect(() => { localStorage.setItem('archiRowHeight', rowHeight); }, [rowHeight]);
+            useEffect(() => { localStorage.setItem('archiTextSize', textSize); }, [textSize]);
+            useEffect(() => { localStorage.setItem('archiColVis', JSON.stringify(columnVisibility)); }, [columnVisibility]);
+            useEffect(() => { localStorage.setItem('archiPdfSize', pdfPaperSize); }, [pdfPaperSize]);
 
             const updateVersion = useCallback((taskUpdater, phaseUpdater, colorUpdater, typeOverride = null, parentUpdater = null) => {
                 setProjects(prev => prev.map(p => {
@@ -371,11 +388,19 @@
             const [filterPhase, setFilterPhase] = useState('All');
             const [filterParty, setFilterParty] = useState('All');
             const [newPhaseName, setNewPhaseName] = useState('');
+            const [editingPhase, setEditingPhase] = useState(null);
 
             const durationUnit = viewMode === 'Weeks' ? 'Weeks' : 'Days';
             const fileInputRef = useRef(null);
 
-            const [expandedPhases, setExpandedPhases] = useState(INITIAL_PHASES.reduce((acc, p) => ({ ...acc, [p]: true }), {}));
+            const [expandedPhases, setExpandedPhases] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('archiExpandedPhases');
+                    if (saved) return JSON.parse(saved);
+                } catch (e) { /* ignore */ }
+                // Default: all phases expanded
+                return {};
+            });
             const [colWidths, setColWidths] = useState({ name: 220, party: 100, duration: 80, start: 120, end: 110 });
 
             // Drag & Drop / Resize States
@@ -532,7 +557,7 @@
                 e.stopPropagation();
                 if (!draggedItem) return;
 
-                const dragAction = dragOverTarget?.type === 'phase' ? dragOverTarget.action : 'inside';
+                const dropPosition = dragOverTarget?.position || 'after'; // 'before' | 'inside' | 'after'
 
                 if (draggedItem.type === 'task' && targetType === 'task') {
                     if (draggedItem.id === targetId) return;
@@ -546,56 +571,95 @@
                         result.splice(tgtIdx >= 0 ? tgtIdx : result.length, 0, moved);
                         return result;
                     }, null, null, durationType);
-                } else if (draggedItem.type === 'phase' && targetType === 'phase') {
-                    if (draggedItem.id === targetId) return;
+                } else if (draggedItem.type === 'phase') {
+                    if (draggedItem.id === targetId && targetType === 'phase') { setDraggedItem(null); setDragOverTarget(null); return; }
 
-                    // Prevent circular dependency: cannot drop a phase inside itself or its descendant
-                    if (dragAction === 'inside') {
-                        let curr = targetId;
+                    if (targetType === 'phase') {
+                        // Phase dropped onto a Phase -> Use 3-zone logic
+                        // Prevent circular dependency
+                        if (dropPosition === 'inside') {
+                            let curr = targetId;
+                            let cycle = false;
+                            while (curr) {
+                                if (curr === draggedItem.id) { cycle = true; break; }
+                                curr = phaseParents[curr];
+                            }
+                            if (cycle) { setDraggedItem(null); setDragOverTarget(null); return; }
+                        }
+
+                        updateVersion(
+                            null,
+                            prevPhases => {
+                                const result = [...prevPhases];
+                                const srcIdx = result.indexOf(draggedItem.id);
+                                if (srcIdx < 0) return prevPhases;
+                                result.splice(srcIdx, 1);
+
+                                const tgtIdx = result.indexOf(targetId);
+                                if (tgtIdx < 0) { result.push(draggedItem.id); return result; }
+
+                                if (dropPosition === 'before') {
+                                    result.splice(tgtIdx, 0, draggedItem.id);
+                                } else {
+                                    result.splice(tgtIdx + 1, 0, draggedItem.id);
+                                }
+                                return result;
+                            },
+                            null,
+                            durationType,
+                            prevParents => {
+                                const next = { ...prevParents };
+                                if (dropPosition === 'inside') {
+                                    next[draggedItem.id] = targetId;
+                                } else {
+                                    const inheritParent = prevParents[targetId];
+                                    if (inheritParent) {
+                                        next[draggedItem.id] = inheritParent;
+                                    } else {
+                                        delete next[draggedItem.id];
+                                    }
+                                }
+                                return next;
+                            }
+                        );
+                    } else if (targetType === 'task') {
+                        // Phase dropped onto a Task -> Append to the task's Phase
+                        // Circular dependency guard
+                        let curr = targetPhase;
                         let cycle = false;
                         while (curr) {
                             if (curr === draggedItem.id) { cycle = true; break; }
                             curr = phaseParents[curr];
                         }
                         if (cycle) { setDraggedItem(null); setDragOverTarget(null); return; }
-                    }
 
-                    updateVersion(
-                        null,
-                        prevPhases => {
-                            const result = [...prevPhases];
-                            const srcIdx = result.indexOf(draggedItem.id);
-                            if (srcIdx < 0) return prevPhases;
-                            result.splice(srcIdx, 1);
+                        updateVersion(
+                            null,
+                            prevPhases => {
+                                const result = [...prevPhases];
+                                const srcIdx = result.indexOf(draggedItem.id);
+                                if (srcIdx < 0) return prevPhases;
+                                result.splice(srcIdx, 1);
 
-                            const tgtIdx = result.indexOf(targetId);
-                            if (tgtIdx < 0) { result.push(draggedItem.id); return result; }
-
-                            if (dragAction === 'before') {
-                                result.splice(tgtIdx, 0, draggedItem.id);
-                            } else {
-                                result.splice(tgtIdx + 1, 0, draggedItem.id);
-                            }
-                            return result;
-                        },
-                        null,
-                        durationType,
-                        prevParents => {
-                            const next = { ...prevParents };
-                            if (dragAction === 'inside') {
-                                next[draggedItem.id] = targetId;
-                            } else {
-                                // Inherit target's parent for before/after
-                                const inheritParent = prevParents[targetId];
-                                if (inheritParent) {
-                                    next[draggedItem.id] = inheritParent;
+                                // Find the last phase that belongs to targetPhase
+                                const lastChildIdx = result.findLastIndex(p => phaseParents[p] === targetPhase);
+                                const insertIdx = lastChildIdx >= 0 ? lastChildIdx + 1 : (result.indexOf(targetPhase) + 1);
+                                if (insertIdx > 0) {
+                                    result.splice(insertIdx, 0, draggedItem.id);
                                 } else {
-                                    delete next[draggedItem.id];
+                                    result.push(draggedItem.id);
                                 }
+                                return result;
+                            },
+                            null,
+                            durationType,
+                            prevParents => {
+                                const next = { ...prevParents };
+                                next[draggedItem.id] = targetPhase;
+                                return next;
                             }
-                            return next;
-                        }
-                    );
+                        );
+                    }
                 } else if (draggedItem.type === 'task' && targetType === 'phase') {
                     updateVersion(prev => {
                         const result = [...prev];
@@ -614,11 +678,7 @@
             };
 
             const handleViewModeChange = (newMode) => {
-                const oldType = durationType;
-                const newType = newMode === 'Days' ? 'Calendar' : 'Business';
-                if (oldType !== newType) {
-                    updateVersion(prev => prev.map(t => ({ ...t, duration: getDurationBetweenDates(t.start, calculateEndDate(t.start, t.duration, oldType), newType) })), null, null, newType);
-                }
+                // Changing view mode is now purely visual and does not destructively recalculate internal task durations.
                 setViewMode(newMode);
             };
 
@@ -638,7 +698,7 @@
             const addTask = useCallback((phase) => {
                 updateVersion(prev => [
                     ...prev,
-                    { id: Math.random().toString(36).substr(2, 9), name: 'New Task', phase, party: 'Architect', start: prev.length > 0 ? addDays(calculateEndDate(prev[prev.length - 1].start, prev[prev.length - 1].duration, durationType), 1) : new Date().toISOString().split('T')[0], duration: durationUnit === 'Weeks' ? (durationType === 'Business' ? 5 : 7) : 5, milestone: 0, deps: prev.length > 0 ? [prev[prev.length - 1].id] : [] }
+                    { id: Math.random().toString(36).substr(2, 9), name: 'New Task', phase, party: 'Architect', start: prev.length > 0 ? addDays(calculateEndDate(prev[prev.length - 1].start, prev[prev.length - 1].duration, durationType), 1) : new Date().toISOString().split('T')[0], duration: durationUnit === 'Weeks' ? 5 : 5, milestone: 0, deps: prev.length > 0 ? [prev[prev.length - 1].id] : [] }
                 ], null, null, durationType);
             }, [durationUnit, durationType, updateVersion]);
 
@@ -656,6 +716,38 @@
                     prev => { const c = { ...prev }; delete c[phase]; return c; },
                     durationType
                 );
+            };
+
+            const handleRenamePhaseSubmit = () => {
+                if (!editingPhase) return;
+                const { oldName, tempName } = editingPhase;
+                const trimmed = tempName.trim();
+                if (trimmed && trimmed !== oldName && !phases.includes(trimmed)) {
+                    updateVersion(
+                        prevTasks => prevTasks.map(t => t.phase === oldName ? { ...t, phase: trimmed } : t),
+                        prevPhases => prevPhases.map(p => p === oldName ? trimmed : p),
+                        prevColors => { const c = { ...prevColors }; if (c[oldName]) { c[trimmed] = c[oldName]; delete c[oldName]; } return c; },
+                        durationType,
+                        prevParents => {
+                            const next = { ...prevParents };
+                            if (next[oldName]) { next[trimmed] = next[oldName]; delete next[oldName]; }
+                            Object.keys(next).forEach(k => { if (next[k] === oldName) next[k] = trimmed; });
+                            return next;
+                        }
+                    );
+                    if (filterPhase === oldName) setFilterPhase(trimmed);
+                    if (expandedPhases[oldName] !== undefined) {
+                        setExpandedPhases(prev => {
+                            const next = { ...prev };
+                            next[trimmed] = next[oldName];
+                            delete next[oldName];
+                            return next;
+                        });
+                    }
+                } else if (phases.includes(trimmed) && trimmed !== oldName) {
+                    alert(`A phase with the name "${trimmed}" already exists.`);
+                }
+                setEditingPhase(null);
             };
 
             const cycleMilestone = useCallback((id) => {
@@ -881,7 +973,7 @@
 
                         if (include) {
                             result.push({ phase, level, hasChildren: phaseChildrenMap[phase]?.length > 0 });
-                            if (expandedPhases[phase]) {
+                            if (expandedPhases[phase] !== false) {
                                 traverse(phaseChildrenMap[phase], level + 1);
                             }
                         }
@@ -960,22 +1052,21 @@
                 let yCursor = 0;
                 renderPhases.forEach(rp => {
                     const phase = rp.phase;
-                    if (!tasksByPhase[phase] || tasksByPhase[phase].length === 0) return;
-                    yCursor += 40;
-                    if (expandedPhases[phase]) {
+                    yCursor += rowHeight; // Phase header height
+                    if (expandedPhases[phase] !== false && tasksByPhase[phase] && tasksByPhase[phase].length > 0) {
                         tasksByPhase[phase].forEach(task => {
                             const endDate = calculateEndDate(task.start, task.duration, durationType);
                             const startOffset = diffDays(timelineBounds.start.toISOString().split('T')[0], task.start);
                             const endOffset = diffDays(timelineBounds.start.toISOString().split('T')[0], endDate);
                             let rightX = (endOffset + 1) * dayWidth;
                             if (task.milestone > 0) rightX = (startOffset * dayWidth) + (dayWidth / 2) + 10;
-                            coords[task.id] = { startX: startOffset * dayWidth, endX: rightX, y: yCursor + 22 };
-                            yCursor += 44;
+                            coords[task.id] = { startX: startOffset * dayWidth, endX: rightX, y: yCursor + (rowHeight / 2) };
+                            yCursor += rowHeight;
                         });
                     }
                 });
                 return coords;
-            }, [tasksByPhase, renderPhases, expandedPhases, timelineBounds, dayWidth, durationType]);
+            }, [tasksByPhase, renderPhases, expandedPhases, timelineBounds, dayWidth, durationType, rowHeight]);
 
             const timelineItems = useMemo(() => {
                 let currentY = 0;
@@ -1009,7 +1100,8 @@
                 return { items, totalHeight: currentY };
             }, [visiblePhases, phaseBounds, tasksByPhase, showTimelineTasks, totalDays, timelineBounds, durationType]);
 
-            const tableInnerWidth = 32 + colWidths.name + colWidths.party + colWidths.duration + colWidths.start + colWidths.end + 16;
+            const visibleCols = ['name', ...(columnVisibility.party ? ['party'] : []), ...(columnVisibility.duration ? ['duration'] : []), ...(columnVisibility.start ? ['start'] : []), ...(columnVisibility.end ? ['end'] : [])];
+            const tableInnerWidth = 32 + visibleCols.reduce((sum, col) => sum + colWidths[col], 0) + 16;
             const todayOffsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], new Date().toISOString().split('T')[0]);
             const showTodayLine = todayOffsetDays >= 0 && todayOffsetDays <= totalDays;
 
@@ -1174,7 +1266,10 @@
                             if (isMS) {
                                 durCell.value = 'M';
                             } else {
-                                durCell.value = durationUnit === 'Weeks' ? Math.ceil(t.duration / (durationType === 'Business' ? 5 : 7)) : t.duration;
+                                let exportDur = t.duration;
+                                if (viewMode === 'Weeks') exportDur = Math.ceil(t.duration / 5);
+                                else if (viewMode === 'Days') exportDur = getDurationBetweenDates(t.start, calculateEndDate(t.start, t.duration, 'Business'), 'Calendar');
+                                durCell.value = exportDur;
                                 durCell.dataValidation = { type: 'whole', operator: 'greaterThan', formula1: 0, showErrorMessage: true, errorTitle: 'Invalid Duration', error: 'Duration must be > 0' };
                             }
                             durCell.alignment = { horizontal: 'center' };
@@ -1189,15 +1284,8 @@
                             if (isMS) {
                                 endCell.value = toExcelDate(t.start);
                             } else {
-                                if (durationType === 'Business') {
-                                    endCell.value = { formula: `WORKDAY(E${currentRowNum}-1, D${currentRowNum}, ${holidaysRange})` };
-                                } else {
-                                    if (durationUnit === 'Weeks') {
-                                        endCell.value = { formula: `E${currentRowNum} + (D${currentRowNum} * 7) - 1` };
-                                    } else {
-                                        endCell.value = { formula: `E${currentRowNum} + D${currentRowNum} - 1` };
-                                    }
-                                }
+                                // Always use Business duration type calculation logic for internal consistency. Excel should mirror the schedule correctly using Business Days.
+                                endCell.value = { formula: `WORKDAY(E${currentRowNum}-1, D${currentRowNum}, ${holidaysRange})` };
                             }
                             endCell.numFmt = 'mm/dd/yyyy';
                             endCell.font = { name: 'Arial', size: 9, color: { argb: 'FF64748B' } };
@@ -1350,6 +1438,431 @@
                 setShowExportModal(false);
             };
 
+            const exportPDF = async () => {
+                setIsExporting(true);
+                try {
+                    if (!window.jspdf) {
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+                    }
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF('landscape', 'pt', pdfPaperSize);
+                    const hexToRgb = (hex) => {
+                        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                        return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 100, g: 100, b: 100 };
+                    };
+                    const blendWhite = (rgb, a) => ({ r: Math.round(rgb.r * a + 255 * (1 - a)), g: Math.round(rgb.g * a + 255 * (1 - a)), b: Math.round(rgb.b * a + 255 * (1 - a)) });
+                    const margin = 40;
+                    const pageWidth = doc.internal.pageSize.getWidth();
+                    const pageHeight = doc.internal.pageSize.getHeight();
+                    const drawHeader = (pageNum, totalPages, titlePostfix) => {
+                        doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(15, 23, 42);
+                        doc.text(`${activeVersion.name}${titlePostfix || ''}`, margin, margin);
+                        doc.setFontSize(10); doc.setFont("helvetica", "normal"); doc.setTextColor(100, 116, 139);
+                        doc.text(`Project: ${activeProject.name}   |   ${activeProject.clientName ? `Client: ${activeProject.clientName}   |   ` : ''}Date: ${new Date().toLocaleDateString()}`, margin, margin + 15);
+                        doc.text(`Page ${pageNum} of ${totalPages || 1}`, pageWidth - margin - 60, margin + 15);
+                        doc.setDrawColor(226, 232, 240); doc.setLineWidth(1);
+                        doc.line(margin, margin + 25, pageWidth - margin, margin + 25);
+                    };
+
+                    if (layoutView === 'Timeline') {
+                        drawHeader(1, 1);
+                        const topOffset = margin + 60;
+                        const timelineW = pageWidth - margin * 2;
+                        const axisY = topOffset + ((pageHeight - topOffset - 60) / 2) - 20;
+                        doc.setDrawColor(203, 213, 225); doc.setLineWidth(2);
+                        doc.line(margin, axisY, margin + timelineW, axisY);
+                        const milestones = filteredTasks.filter(t => t.milestone > 0);
+                        milestones.forEach((m) => {
+                            const offsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], m.start);
+                            const percent = Math.max(0, Math.min(1, offsetDays / totalDays));
+                            const x = margin + percent * timelineW;
+                            const isOwner = m.milestone === 2;
+                            const h = isOwner ? 70 : 40;
+                            doc.setDrawColor(203, 213, 225); doc.setLineWidth(1);
+                            doc.line(x, axisY, x, axisY - h);
+                            if (m.color) { const mc = hexToRgb(m.color); doc.setFillColor(mc.r, mc.g, mc.b); }
+                            else if (isOwner) doc.setFillColor(16, 185, 129);
+                            else doc.setFillColor(251, 191, 36);
+                            const size = 4;
+                            doc.triangle(x, axisY - size, x + size, axisY, x, axisY + size, 'F');
+                            doc.triangle(x, axisY - size, x - size, axisY, x, axisY + size, 'F');
+                            doc.setFontSize(8); doc.setFont("helvetica", isOwner ? "bold" : "normal");
+                            if (m.color) { const mc = hexToRgb(m.color); doc.setTextColor(mc.r, mc.g, mc.b); }
+                            else doc.setTextColor(isOwner ? 4 : 51, isOwner ? 120 : 65, isOwner ? 87 : 85);
+                            const textW = doc.getTextWidth(m.name) + 10;
+                            const textX = Math.max(margin, Math.min(pageWidth - margin - textW, x - (textW / 2)));
+                            const textY = axisY - h - 15;
+                            doc.setDrawColor(226, 232, 240);
+                            if (m.color) { const mc = hexToRgb(m.color); const bg = blendWhite(mc, 0.1); doc.setFillColor(bg.r, bg.g, bg.b); }
+                            else doc.setFillColor(isOwner ? 209 : 248, isOwner ? 250 : 250, isOwner ? 229 : 252);
+                            doc.roundedRect(textX, textY, textW, 14, 2, 2, 'FD');
+                            doc.text(m.name, textX + 5, textY + 10);
+                            doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+                            doc.text(formatShortDate(m.start), x, textY - 4, { align: 'center' });
+                        });
+                        let currentY = axisY + 20;
+                        visiblePhases.forEach((phase) => {
+                            const pBounds = phaseBounds[phase];
+                            if (!pBounds) return;
+                            const pStartPercent = pBounds.offStart / totalDays;
+                            const pEndPercent = pBounds.offEnd / totalDays;
+                            const pWidthPercent = pEndPercent - pStartPercent;
+                            const x = margin + pStartPercent * timelineW;
+                            const w = Math.max(pWidthPercent * timelineW, 2);
+                            const colorStr = phaseColors[phase] || '#94a3b8';
+                            const rgb = hexToRgb(colorStr);
+                            doc.setFillColor(rgb.r, rgb.g, rgb.b);
+                            doc.roundedRect(x, currentY, w, 14, 3, 3, 'F');
+                            doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor(255, 255, 255);
+                            let text = phase;
+                            if (doc.getTextWidth(text) > w - 10) { text = text.substring(0, Math.floor((w - 10) / 5)) + '...'; if (w < 20) text = ''; }
+                            if (text) doc.text(text, x + 5, currentY + 10);
+                            doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+                            doc.text(formatShortDate(pBounds.minS), x, currentY - 2);
+                            doc.text(formatShortDate(pBounds.maxE), x + w, currentY - 2, { align: 'right' });
+                            currentY += showTimelineTasks ? 20 : 25;
+                            if (showTimelineTasks) {
+                                const pTasks = tasksByPhase[phase] || [];
+                                pTasks.forEach(task => {
+                                    if (task.milestone > 0) return;
+                                    const tEnd = calculateEndDate(task.start, task.duration, durationType);
+                                    const offStart = diffDays(timelineBounds.start.toISOString().split('T')[0], task.start);
+                                    const offEnd = diffDays(timelineBounds.start.toISOString().split('T')[0], tEnd);
+                                    const left = offStart / totalDays; const width = (offEnd - offStart + 1) / totalDays;
+                                    const tx = margin + left * timelineW; const tw = Math.max(width * timelineW, 2);
+                                    const tColor = task.color || phaseColors[phase] || '#94a3b8';
+                                    const tRgb = hexToRgb(tColor);
+                                    doc.setFillColor(Math.min(255, tRgb.r + 30), Math.min(255, tRgb.g + 30), Math.min(255, tRgb.b + 30));
+                                    doc.roundedRect(tx, currentY, tw, 10, 1, 1, 'F');
+                                    doc.setFontSize(7); doc.setFont("helvetica", "bold"); doc.setTextColor(255, 255, 255);
+                                    let tName = task.name;
+                                    if (doc.getTextWidth(tName) > tw - 4) { tName = tName.substring(0, Math.floor((tw - 4) / 4)) + '...'; if (tw < 15) tName = ''; }
+                                    if (tName) doc.text(tName, tx + 2, currentY + 8);
+                                    currentY += 12;
+                                });
+                                currentY += 10;
+                            }
+                        });
+                    } else {
+                        // === GANTT VIEW PDF ===
+                        const topOffset = margin + 40;
+                        const pdfRowH = Math.max(14, Math.round(rowHeight * 0.6));
+                        const maxRowsPerPage = Math.floor((pageHeight - topOffset - 40) / pdfRowH);
+                        // Convert UI pixel widths directly to PDF points (1px = 0.75pt)
+                        const pxToPt = 0.75;
+                        const usableWidth = pageWidth - margin * 2;
+                        const tableWidth = Math.min(panelWidth * pxToPt, usableWidth * 0.6);
+                        const pdfVisibleCols = [{ key: 'name', label: 'Task Name' }];
+                        if (columnVisibility.party) pdfVisibleCols.push({ key: 'party', label: 'Party' });
+                        if (columnVisibility.duration) pdfVisibleCols.push({ key: 'duration', label: 'duration' });
+                        if (columnVisibility.start) pdfVisibleCols.push({ key: 'start', label: 'Start' });
+                        if (columnVisibility.end) pdfVisibleCols.push({ key: 'end', label: 'End' });
+                        const totalColW = pdfVisibleCols.reduce((sum, c) => sum + colWidths[c.key], 0);
+                        const scale = tableWidth / (totalColW * pxToPt);
+                        const pdfCols = {};
+                        let colX = margin;
+                        pdfVisibleCols.forEach(c => {
+                            const w = colWidths[c.key] * pxToPt * scale;
+                            pdfCols[c.key] = { x: colX, w };
+                            colX += w;
+                        });
+                        const cName = pdfCols.name;
+                        const cParty = pdfCols.party || { x: 0, w: 0 };
+                        const cDur = pdfCols.duration || { x: 0, w: 0 };
+                        const cStart = pdfCols.start || { x: 0, w: 0 };
+                        const cEnd = pdfCols.end || { x: 0, w: 0 };
+                        const timelineX = margin + tableWidth;
+                        const timelineMaxW = usableWidth - tableWidth;
+                        // Build rows from renderPhases (respects expand/collapse)
+                        const rows = [];
+                        renderPhases.forEach(rp => {
+                            const p = rp.phase; const level = rp.level;
+                            const pTasks = tasksByPhase[p];
+                            const isExpanded = expandedPhases[p] !== false;
+                            rows.push({ type: 'phase', phase: p, level });
+                            if (isExpanded && pTasks && pTasks.length > 0) {
+                                pTasks.forEach(t => rows.push({ type: 'task', phase: p, task: t, level }));
+                            }
+                        });
+                        if (rows.length === 0) {
+                            rows.push({ type: 'task', phase: 'None', task: { name: 'No tasks', party: '', duration: 1, start: new Date().toISOString().split('T')[0], milestone: 0, deps: [] }, level: 0 });
+                        }
+                        let maxTaskEndIdx = 0;
+                        rows.forEach(r => {
+                            if (r.type === 'task') {
+                                const endDateStr = calculateEndDate(r.task.start, r.task.duration, durationType);
+                                const eIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], endDateStr);
+                                if (eIdx > maxTaskEndIdx) maxTaskEndIdx = eIdx;
+                            }
+                        });
+                        const pdfTotalDays = Math.max(1, Math.min(totalDays, maxTaskEndIdx + 5));
+                        // Always scale timeline to fit page width (no horizontal pagination)
+                        const printDayWidth = timelineMaxW / Math.max(1, pdfTotalDays);
+                        const startDayIdx = 0;
+                        const endDayIdx = pdfTotalDays;
+                        const vPages = Math.ceil(rows.length / maxRowsPerPage);
+                        const totalPages = vPages;
+                        let pageNum = 1;
+                        for (let v = 0; v < vPages; v++) {
+                            const startRowInfo = v * maxRowsPerPage;
+                            if (startRowInfo >= rows.length) break;
+                            if (pageNum > 1) doc.addPage();
+                            drawHeader(pageNum, totalPages, '');
+                            let startY = topOffset;
+                            // Table Header
+                            doc.setFillColor(248, 250, 252);
+                            doc.rect(margin, startY, pageWidth - margin * 2, 30, 'F');
+                            doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(51, 65, 85);
+                            doc.text("Task Name", cName.x + 5, startY + 20);
+                            if (columnVisibility.party) doc.text("Party", cParty.x + 3, startY + 20);
+                            const durHeader = `Dur (${viewMode === 'Days' ? 'Cal' : viewMode === 'Weeks' ? 'Wks' : 'Bus'})`;
+                            if (columnVisibility.duration) doc.text(durHeader, cDur.x + 3, startY + 20);
+                            if (columnVisibility.start) doc.text("Start", cStart.x + 3, startY + 20);
+                            if (columnVisibility.end) doc.text("End", cEnd.x + 3, startY + 20);
+                            doc.setDrawColor(203, 213, 225);
+                            doc.line(timelineX, startY, timelineX, startY + 30);
+                            // Timeline Header (Months & Days)
+                            let currentMonthStr = ""; let monthStartX = timelineX;
+                            doc.setFontSize(8); doc.setFont("helvetica", "normal");
+                            for (let i = startDayIdx; i <= endDayIdx; i++) {
+                                if (i >= timelineHeaders.days.length) break;
+                                const d = timelineHeaders.days[i];
+                                const x = timelineX + (i - startDayIdx) * printDayWidth;
+                                const yStr = d.date.getUTCFullYear().toString().slice(-2);
+                                const mStr = d.date.toLocaleString('default', { month: 'short', timeZone: 'UTC' }) + ' \'' + yStr;
+                                if (mStr !== currentMonthStr || i === endDayIdx) {
+                                    if (currentMonthStr !== "") {
+                                        doc.text(currentMonthStr, monthStartX + 2, startY + 12);
+                                        doc.setDrawColor(203, 213, 225); doc.line(x, startY, x, startY + 15);
+                                    }
+                                    currentMonthStr = mStr; monthStartX = x;
+                                }
+                                if (printDayWidth > 15) {
+                                    doc.setTextColor(100, 116, 139);
+                                    doc.text(`${d.date.getUTCDate()}`, x + (printDayWidth / 2), startY + 25, { align: 'center' });
+                                } else if (d.date.getUTCDay() === 1) {
+                                    doc.setTextColor(148, 163, 184);
+                                    doc.text(`${d.date.getUTCMonth() + 1}/${d.date.getUTCDate()}`, x + 2, startY + 25);
+                                }
+                            }
+                            doc.setDrawColor(226, 232, 240);
+                            doc.line(margin, startY + 30, pageWidth - margin, startY + 30);
+                            const startRow = v * maxRowsPerPage;
+                            let endRow = Math.min(rows.length, startRow + maxRowsPerPage);
+                            // Weekend Shading and Vertical Lines
+                            for (let i = startDayIdx; i <= endDayIdx; i++) {
+                                if (i >= timelineHeaders.days.length) break;
+                                const d = timelineHeaders.days[i];
+                                const x = timelineX + (i - startDayIdx) * printDayWidth;
+                                if (d.isWeekend || d.isHoliday) {
+                                    doc.setFillColor(d.isHoliday ? 254 : 248, d.isHoliday ? 242 : 250, d.isHoliday ? 242 : 252);
+                                    doc.rect(x, startY + 30, printDayWidth, (endRow - startRow) * pdfRowH, 'F');
+                                    doc.setDrawColor(241, 245, 249);
+                                    doc.line(x, startY + 30, x, startY + 30 + (endRow - startRow) * pdfRowH);
+                                }
+                                if (d.date.getUTCDay() === 1) {
+                                    doc.setDrawColor(226, 232, 240);
+                                    doc.line(x, startY + 20, x, startY + 30 + (endRow - startRow) * pdfRowH);
+                                } else if (printDayWidth > 10 && !d.isWeekend && !d.isHoliday) {
+                                    doc.setDrawColor(245, 248, 250);
+                                    doc.line(x, startY + 30, x, startY + 30 + (endRow - startRow) * pdfRowH);
+                                }
+                            }
+                            // Today line
+                            if (showTodayLine && todayOffsetDays >= startDayIdx && todayOffsetDays <= endDayIdx) {
+                                const todayX = timelineX + (todayOffsetDays - startDayIdx) * printDayWidth;
+                                doc.setDrawColor(239, 68, 68); doc.setLineWidth(1.5);
+                                doc.line(todayX, startY + 30, todayX, startY + 30 + (endRow - startRow) * pdfRowH);
+                                doc.setLineWidth(1);
+                            }
+                            // Draw Rows
+                            startY += 30;
+                            for (let r = startRow; r < endRow; r++) {
+                                const row = rows[r];
+                                const isPhase = row.type === 'phase';
+                                const y = startY + (r - startRow) * pdfRowH;
+                                const indent = (row.level || 0) * 14;
+                                if (isPhase) {
+                                    // Phase row with colored background
+                                    const pColorStr = phaseColors[row.phase] || '#94a3b8';
+                                    const pRgb = hexToRgb(pColorStr);
+                                    const bgRgb = blendWhite(pRgb, 0.18);
+                                    doc.setFillColor(bgRgb.r, bgRgb.g, bgRgb.b);
+                                    doc.rect(margin, y, pageWidth - margin * 2, pdfRowH, 'F');
+                                    // Phase color swatch
+                                    doc.setFillColor(pRgb.r, pRgb.g, pRgb.b);
+                                    doc.roundedRect(cName.x + 5 + indent, y + (pdfRowH / 2) - 5, 8, 10, 1, 1, 'F');
+                                    // Phase name
+                                    doc.setFont("helvetica", "bold"); doc.setTextColor(15, 23, 42); doc.setFontSize(10);
+                                    let pName = row.phase;
+                                    const maxNameW = cName.w - indent - 20;
+                                    if (doc.getTextWidth(pName) > maxNameW) pName = pName.substring(0, Math.floor(maxNameW / 6)) + '...';
+                                    doc.text(pName, cName.x + 17 + indent, y + (pdfRowH / 2) + 4);
+                                    // Phase duration
+                                    const phBounds = phaseBounds[row.phase];
+                                    if (phBounds) {
+                                        let pDur = 0;
+                                        if (viewMode === 'Weeks') pDur = Math.ceil(getDurationBetweenDates(phBounds.minS, phBounds.maxE, 'Business') / 5);
+                                        else if (viewMode === 'Days') pDur = getDurationBetweenDates(phBounds.minS, phBounds.maxE, 'Calendar');
+                                        else pDur = getDurationBetweenDates(phBounds.minS, phBounds.maxE, 'Business');
+                                        doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(100, 116, 139);
+                                        if (columnVisibility.duration) doc.text(`${pDur}${viewMode === 'Weeks' ? 'w' : 'd'}`, cDur.x + 3, y + (pdfRowH / 2) + 3);
+                                        if (columnVisibility.start) doc.text(formatShortDate(phBounds.minS), cStart.x + 3, y + (pdfRowH / 2) + 3);
+                                        if (columnVisibility.end) doc.text(formatShortDate(phBounds.maxE), cEnd.x + 3, y + (pdfRowH / 2) + 3);
+                                    }
+                                    // Phase bar in timeline
+                                    const pb = phaseBounds[row.phase];
+                                    if (pb) {
+                                        const pStartIdx = Math.max(0, pb.offStart);
+                                        const pEndIdx = pb.offEnd;
+                                        if (pEndIdx >= startDayIdx && pStartIdx <= endDayIdx) {
+                                            const drawStart = Math.max(startDayIdx, pStartIdx);
+                                            const drawEnd = Math.min(endDayIdx, pEndIdx);
+                                            const barX = timelineX + (drawStart - startDayIdx) * printDayWidth;
+                                            const barW = Math.max((drawEnd - drawStart) * printDayWidth, 2);
+                                            doc.setFillColor(pRgb.r, pRgb.g, pRgb.b);
+                                            doc.roundedRect(barX, y + (pdfRowH / 2) - 2, barW, 4, 1, 1, 'F');
+                                        }
+                                    }
+                                } else {
+                                    // Task row
+                                    if ((r - startRow) % 2 === 1) {
+                                        doc.setFillColor(248, 250, 252);
+                                        doc.rect(margin, y, tableWidth, pdfRowH, 'F');
+                                    }
+                                    const t = row.task;
+                                    const isMS = t.milestone > 0;
+                                    const endDateStr = calculateEndDate(t.start, t.duration, durationType);
+                                    // Task Name
+                                    doc.setFont("helvetica", isMS ? "bold" : "normal");
+                                    if (t.milestone === 2) doc.setTextColor(5, 150, 105);
+                                    else if (t.milestone === 1) doc.setTextColor(217, 119, 6);
+                                    else doc.setTextColor(51, 65, 85);
+                                    doc.setFontSize(9);
+                                    let nameDisp = t.name;
+                                    const maxTNameW = cName.w - indent - 18;
+                                    if (doc.getTextWidth(nameDisp) > maxTNameW) {
+                                        while (doc.getTextWidth(nameDisp + '...') > maxTNameW && nameDisp.length > 0) nameDisp = nameDisp.slice(0, -1);
+                                        nameDisp += '...';
+                                    }
+                                    doc.text(nameDisp, cName.x + 15 + indent, y + (pdfRowH / 2) + 3);
+                                    // Party
+                                    if (columnVisibility.party) {
+                                        doc.setFont("helvetica", isMS ? "bold" : "normal");
+                                        if (t.milestone === 2) doc.setTextColor(5, 150, 105);
+                                        else if (t.milestone === 1) doc.setTextColor(217, 119, 6);
+                                        else doc.setTextColor(100, 116, 139);
+                                        doc.setFontSize(8);
+                                        let partyDisp = t.party || '';
+                                        const maxPartyW = cParty.w - 6;
+                                        if (doc.getTextWidth(partyDisp) > maxPartyW) partyDisp = partyDisp.substring(0, Math.floor(maxPartyW / 4.5)) + '..';
+                                        doc.text(partyDisp, cParty.x + 3, y + (pdfRowH / 2) + 3);
+                                    }
+                                    // Duration
+                                    if (columnVisibility.duration) {
+                                        let pdfDisplayDur = t.duration;
+                                        if (viewMode === 'Weeks') pdfDisplayDur = Math.ceil(t.duration / 5);
+                                        else if (viewMode === 'Days') pdfDisplayDur = getDurationBetweenDates(t.start, endDateStr, 'Calendar');
+                                        const durLabel = isMS ? 'M' : `${pdfDisplayDur}${viewMode === 'Weeks' ? 'w' : 'd'}`;
+                                        doc.text(durLabel, cDur.x + 3, y + (pdfRowH / 2) + 3);
+                                    }
+                                    // Start Date
+                                    if (columnVisibility.start) {
+                                        doc.setFont("helvetica", isMS ? "bold" : "normal");
+                                        if (t.milestone === 2) doc.setTextColor(5, 150, 105);
+                                        else if (t.milestone === 1) doc.setTextColor(217, 119, 6);
+                                        else doc.setTextColor(51, 65, 85);
+                                        doc.text(formatShortDate(t.start), cStart.x + 3, y + (pdfRowH / 2) + 3);
+                                    }
+                                    // End Date
+                                    if (columnVisibility.end) {
+                                        doc.setTextColor(100, 116, 139);
+                                        doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+                                        doc.text(formatShortDate(endDateStr), cEnd.x + 3, y + (pdfRowH / 2) + 3);
+                                    }
+                                    // Gantt bars
+                                    const tStartIdx = Math.max(0, diffDays(timelineBounds.start.toISOString().split('T')[0], t.start));
+                                    const tEndIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], endDateStr);
+                                    if (tEndIdx >= 0 && tStartIdx < pdfTotalDays) {
+                                        const colorStr = t.color || phaseColors[row.phase] || '#94a3b8';
+                                        const rgb = hexToRgb(colorStr);
+                                        let segments = [];
+                                        if (viewMode === 'Business' && t.milestone === 0) {
+                                            let currentSegStart = null;
+                                            let current = parseDate(t.start); const endD = parseDate(endDateStr);
+                                            while (current <= endD) {
+                                                const dStr = current.toISOString().split('T')[0];
+                                                if (!isNonWorkingDay(dStr, 'Business')) { if (!currentSegStart) currentSegStart = dStr; }
+                                                else { if (currentSegStart) { segments.push({ start: currentSegStart, end: addDays(dStr, -1) }); currentSegStart = null; } }
+                                                current.setUTCDate(current.getUTCDate() + 1);
+                                            }
+                                            if (currentSegStart) segments.push({ start: currentSegStart, end: endDateStr });
+                                        } else { segments.push({ start: t.start, end: endDateStr }); }
+                                        if (t.milestone > 0) {
+                                            if (t.color) { const rgbMs = hexToRgb(t.color); doc.setFillColor(rgbMs.r, rgbMs.g, rgbMs.b); }
+                                            else if (t.milestone === 2) doc.setFillColor(16, 185, 129);
+                                            else doc.setFillColor(251, 191, 36);
+                                            const cx = timelineX + (tStartIdx - startDayIdx) * printDayWidth + (printDayWidth / 2);
+                                            const cy = y + (pdfRowH / 2); const sz = 5;
+                                            doc.triangle(cx, cy - sz, cx + sz, cy, cx, cy + sz, 'F');
+                                            doc.triangle(cx, cy - sz, cx - sz, cy, cx, cy + sz, 'F');
+                                        } else {
+                                            if (segments.length > 1) {
+                                                const oDrawS = Math.max(startDayIdx, tStartIdx);
+                                                const oDrawE = Math.min(endDayIdx, tEndIdx);
+                                                if (oDrawE >= oDrawS) {
+                                                    doc.setFillColor(Math.floor(rgb.r + (255 - rgb.r) * 0.8), Math.floor(rgb.g + (255 - rgb.g) * 0.8), Math.floor(rgb.b + (255 - rgb.b) * 0.8));
+                                                    const oXS = timelineX + (oDrawS - startDayIdx) * printDayWidth;
+                                                    const oXE = timelineX + ((oDrawE + 1) - startDayIdx) * printDayWidth;
+                                                    doc.roundedRect(oXS, y + 4, Math.max(oXE - oXS, 2), pdfRowH - 8, 2, 2, 'F');
+                                                }
+                                            }
+                                            segments.forEach(seg => {
+                                                const segSI = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.start);
+                                                const segEI = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.end);
+                                                if (segEI >= startDayIdx && segSI <= endDayIdx) {
+                                                    const dSI = Math.max(startDayIdx, segSI); const dEI = Math.min(endDayIdx, segEI);
+                                                    const xS = timelineX + (dSI - startDayIdx) * printDayWidth;
+                                                    const xE = timelineX + ((dEI + 1) - startDayIdx) * printDayWidth;
+                                                    let w = xE - xS; if (w < 2) w = 2;
+                                                    doc.setFillColor(rgb.r, rgb.g, rgb.b);
+                                                    doc.roundedRect(xS, y + 4, w, pdfRowH - 8, 2, 2, 'F');
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
+                                // Column dividers
+                                doc.setDrawColor(226, 232, 240);
+                                pdfVisibleCols.forEach((c, ci) => {
+                                    if (ci > 0) doc.line(pdfCols[c.key].x, y, pdfCols[c.key].x, y + pdfRowH);
+                                });
+                                doc.line(timelineX, y, timelineX, y + pdfRowH);
+                            }
+
+                            // Bottom bounding line
+                            doc.setDrawColor(203, 213, 225);
+                            doc.line(margin, startY + (endRow - startRow) * pdfRowH, pageWidth - margin, startY + (endRow - startRow) * pdfRowH);
+                            pageNum++;
+                        }
+                    }
+
+                    const pdfBlob = doc.output('blob');
+                    const url = URL.createObjectURL(pdfBlob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${activeProject.name.replace(/\s+/g, '_')}_Schedule.pdf`;
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                } catch (err) {
+                    console.error(err);
+                    alert("Failed to export PDF! " + err.message);
+                }
+                setIsExporting(false);
+                setShowExportModal(false);
+            };
+
+
             const exportCSV = () => {
                 let csv = 'Phase,Task Name,Party,Duration,Start Date,End Date\n';
                 flattenedPhases.forEach(fp => {
@@ -1357,7 +1870,10 @@
                     if (tasksByPhase[p]) {
                         tasksByPhase[p].forEach(t => {
                             const endStr = calculateEndDate(t.start, t.duration, durationType);
-                            csv += `"${p}","${t.name}","${t.party}","${t.duration}","${t.start}","${endStr}"\n`;
+                            let exportDur = t.duration;
+                            if (viewMode === 'Weeks') exportDur = Math.ceil(t.duration / 5);
+                            else if (viewMode === 'Days') exportDur = getDurationBetweenDates(t.start, endStr, 'Calendar');
+                            csv += `"${p}","${t.name}","${t.party}","${exportDur}","${t.start}","${endStr}"\n`;
                         });
                     }
                 });
@@ -1383,483 +1899,7 @@
                 setShowExportModal(false);
             };
 
-            const exportPDF = async () => {
-                setIsExporting(true);
-                try {
-                    if (!window.jspdf) {
-                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-                    }
-                    const { jsPDF } = window.jspdf;
-                    const doc = new jsPDF('landscape', 'pt', 'letter');
 
-                    const hexToRgb = (hex) => {
-                        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-                        return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 100, g: 100, b: 100 };
-                    };
-
-                    const margin = 40;
-                    const pageWidth = doc.internal.pageSize.getWidth();
-                    const pageHeight = doc.internal.pageSize.getHeight();
-
-                    const drawHeader = (pageNum, totalPages, titlePostfix) => {
-                        doc.setFont("helvetica", "bold");
-                        doc.setFontSize(16);
-                        doc.setTextColor(15, 23, 42);
-                        doc.text(`${activeVersion.name}${titlePostfix}`, margin, margin);
-
-                        doc.setFontSize(10);
-                        doc.setFont("helvetica", "normal");
-                        doc.setTextColor(100, 116, 139);
-                        doc.text(`Project: ${activeProject.name}   |   ${activeProject.clientName ? `Client: ${activeProject.clientName}   |   ` : ''}Date: ${new Date().toLocaleDateString()}`, margin, margin + 15);
-
-                        if (totalPages) {
-                            doc.text(`Page ${pageNum} of ${totalPages}`, pageWidth - margin - 60, margin + 15);
-                        } else {
-                            doc.text(`Page 1 of 1`, pageWidth - margin - 60, margin + 15);
-                        }
-                        doc.setDrawColor(226, 232, 240);
-                        doc.setLineWidth(1);
-                        doc.line(margin, margin + 25, pageWidth - margin, margin + 25);
-                    };
-
-                    if (layoutView === 'Timeline') {
-                        drawHeader(1, 1);
-
-                        const topOffset = margin + 60;
-                        const timelineW = pageWidth - margin * 2;
-                        const timelineH = pageHeight - topOffset - 60;
-
-                        const axisY = topOffset + (timelineH / 2) - 20;
-                        doc.setDrawColor(203, 213, 225);
-                        doc.setLineWidth(2);
-                        doc.line(margin, axisY, margin + timelineW, axisY);
-
-                        const milestones = filteredTasks.filter(t => t.milestone > 0);
-                        milestones.forEach((m, i) => {
-                            const offsetDays = diffDays(timelineBounds.start.toISOString().split('T')[0], m.start);
-                            const percent = Math.max(0, Math.min(1, offsetDays / totalDays));
-                            const x = margin + percent * timelineW;
-
-                            const isOwner = m.milestone === 2;
-                            const h = isOwner ? 70 : 40;
-
-                            doc.setDrawColor(203, 213, 225);
-                            doc.setLineWidth(1);
-                            doc.line(x, axisY, x, axisY - h);
-
-                            if (isOwner) {
-                                doc.setFillColor(16, 185, 129); // emerald-500
-                            } else {
-                                doc.setFillColor(251, 191, 36);
-                            }
-
-                            const size = 4;
-                            doc.triangle(x, axisY - size, x + size, axisY, x, axisY + size, 'F');
-                            doc.triangle(x, axisY - size, x - size, axisY, x, axisY + size, 'F');
-
-                            doc.setFontSize(8);
-                            doc.setFont("helvetica", isOwner ? "bold" : "normal");
-                            doc.setTextColor(isOwner ? 4 : 51, isOwner ? 120 : 65, isOwner ? 87 : 85);
-                            const textW = doc.getTextWidth(m.name) + 10;
-                            const textX = Math.max(margin, Math.min(pageWidth - margin - textW, x - (textW / 2)));
-                            const textY = axisY - h - 15;
-
-                            doc.setDrawColor(226, 232, 240);
-                            doc.setFillColor(isOwner ? 209 : 248, isOwner ? 250 : 250, isOwner ? 229 : 252);
-                            doc.roundedRect(textX, textY, textW, 14, 2, 2, 'FD');
-                            doc.text(m.name, textX + 5, textY + 10);
-
-                            doc.setFontSize(7);
-                            doc.setTextColor(148, 163, 184);
-                            doc.text(formatShortDate(m.start), x, textY - 4, { align: 'center' });
-                        });
-
-                        let currentY = axisY + 20;
-                        visiblePhases.forEach((phase) => {
-                            const pBounds = phaseBounds[phase];
-                            if (!pBounds) return;
-
-                            const pStartPercent = pBounds.offStart / totalDays;
-                            const pWidthPercent = pBounds.width / (totalDays * dayWidth);
-
-                            const x = margin + pStartPercent * timelineW;
-                            const w = pWidthPercent * timelineW;
-
-                            const colorStr = phaseColors[phase] || '#94a3b8';
-                            const rgb = hexToRgb(colorStr);
-
-                            doc.setFillColor(rgb.r, rgb.g, rgb.b);
-                            doc.roundedRect(x, currentY, Math.max(w, 2), 14, 3, 3, 'F');
-
-                            doc.setFontSize(8);
-                            doc.setFont("helvetica", "bold");
-                            doc.setTextColor(255, 255, 255);
-
-                            let text = phase;
-                            if (doc.getTextWidth(text) > w - 10) {
-                                text = text.substring(0, Math.floor((w - 10) / 5)) + '...';
-                                if (w < 20) text = '';
-                            }
-                            if (text) doc.text(text, x + 5, currentY + 10);
-
-                            doc.setFontSize(7);
-                            doc.setTextColor(148, 163, 184);
-                            doc.text(formatShortDate(pBounds.minS), x, currentY - 2);
-                            doc.text(formatShortDate(pBounds.maxE), x + w, currentY - 2, { align: 'right' });
-
-                            currentY += showTimelineTasks ? 20 : 25;
-
-                            if (showTimelineTasks) {
-                                const pTasks = tasksByPhase[phase] || [];
-                                pTasks.forEach(task => {
-                                    if (task.milestone > 0) return;
-                                    const tEnd = calculateEndDate(task.start, task.duration, durationType);
-                                    const offStart = diffDays(timelineBounds.start.toISOString().split('T')[0], task.start);
-                                    const offEnd = diffDays(timelineBounds.start.toISOString().split('T')[0], tEnd);
-                                    const left = offStart / totalDays;
-                                    const width = (offEnd - offStart + 1) / totalDays;
-
-                                    const tx = margin + left * timelineW;
-                                    const tw = width * timelineW;
-
-                                    const tColor = task.color || phaseColors[phase] || '#94a3b8';
-                                    const tRgb = hexToRgb(tColor);
-
-                                    doc.setFillColor(Math.min(255, tRgb.r + 30), Math.min(255, tRgb.g + 30), Math.min(255, tRgb.b + 30));
-                                    doc.roundedRect(tx, currentY, Math.max(tw, 2), 10, 1, 1, 'F');
-
-                                    doc.setFontSize(7);
-                                    doc.setFont("helvetica", "bold");
-                                    doc.setTextColor(255, 255, 255);
-                                    let tName = task.name;
-                                    if (doc.getTextWidth(tName) > tw - 4) {
-                                        tName = tName.substring(0, Math.floor((tw - 4) / 4)) + '...';
-                                        if (tw < 15) tName = '';
-                                    }
-                                    if (tName) doc.text(tName, tx + 2, currentY + 8);
-
-                                    currentY += 12;
-                                });
-                                currentY += 10;
-                            }
-                        });
-                    } else {
-                        const topOffset = margin + 40;
-                        const rowHeight = 22;
-                        const maxRowsPerPage = Math.floor((pageHeight - topOffset - 40) / rowHeight);
-
-                        const colName = margin;
-                        const colParty = margin + 140;
-                        const colDur = margin + 200;
-                        const colStart = margin + 240;
-                        const tableWidth = 300;
-                        const timelineX = margin + tableWidth;
-                        const timelineMaxW = pageWidth - margin * 2 - tableWidth;
-
-                        const rows = [];
-                        flattenedPhases.forEach(fp => {
-                            const p = fp.phase;
-                            const level = fp.level;
-                            const pTasks = tasksByPhase[p];
-                            if (pTasks && pTasks.length > 0) {
-                                rows.push({ type: 'phase', phase: p, level });
-                                pTasks.forEach(t => rows.push({ type: 'task', phase: p, task: t, level }));
-                            }
-                        });
-
-                        if (rows.length === 0) {
-                            rows.push({ type: 'task', phase: 'None', task: { name: 'No tasks', party: '', duration: 1, start: new Date().toISOString().split('T')[0], milestone: 0 } });
-                        }
-
-                        let maxTaskEndIdx = 0;
-                        rows.forEach(r => {
-                            if (r.type === 'task') {
-                                const endDateStr = calculateEndDate(r.task.start, r.task.duration, durationType);
-                                const eIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], endDateStr);
-                                if (eIdx > maxTaskEndIdx) maxTaskEndIdx = eIdx;
-                            }
-                        });
-                        const pdfTotalDays = Math.max(1, Math.min(totalDays, maxTaskEndIdx + 5));
-
-                        let printDayWidth = timelineMaxW / Math.max(1, pdfTotalDays);
-                        let hPages = 1;
-                        if (printDayWidth < 5) {
-                            printDayWidth = 5;
-                            hPages = Math.ceil((pdfTotalDays * printDayWidth) / timelineMaxW);
-                        }
-                        const daysPerPage = Math.floor(timelineMaxW / printDayWidth);
-
-                        const vPages = Math.ceil(rows.length / maxRowsPerPage);
-                        const totalPages = vPages * hPages;
-                        let pageNum = 1;
-
-                        for (let h = 0; h < hPages; h++) {
-                            const startDayIdx = h * daysPerPage;
-                            const endDayIdx = Math.min(pdfTotalDays, startDayIdx + daysPerPage);
-
-                            for (let v = 0; v < vPages; v++) {
-                                const startRowInfo = v * maxRowsPerPage;
-                                if (startRowInfo >= rows.length) {
-                                    // Break early if we've run out of rows on this vertical pass.
-                                    break;
-                                }
-
-                                if (pageNum > 1) doc.addPage();
-
-                                drawHeader(pageNum, totalPages, '');
-
-                                let startY = topOffset;
-
-                                // 2. Table Headers
-                                doc.setFillColor(248, 250, 252);
-                                doc.rect(margin, startY, pageWidth - margin * 2, 30, 'F');
-
-                                doc.setFont("helvetica", "bold");
-                                doc.setFontSize(9);
-                                doc.setTextColor(51, 65, 85);
-
-                                if (h === 0) {
-                                    doc.text("Task Name", colName + 5, startY + 20);
-                                    doc.text("Party", colParty, startY + 20);
-                                    doc.text("Duration", colDur, startY + 20);
-                                    doc.text("Start", colStart, startY + 20);
-                                } else {
-                                    doc.text(`Timeline (Cont. Part ${h + 1})`, colName + 5, startY + 20);
-                                }
-
-                                doc.setDrawColor(203, 213, 225);
-                                doc.line(timelineX, startY, timelineX, startY + 30);
-
-                                // Timeline Header (Months & Days)
-                                let currentMonthStr = "";
-                                let monthStartX = timelineX;
-                                doc.setFontSize(8);
-                                doc.setFont("helvetica", "normal");
-
-                                for (let i = startDayIdx; i <= endDayIdx; i++) {
-                                    if (i >= timelineHeaders.days.length) break;
-                                    const d = timelineHeaders.days[i];
-                                    const x = timelineX + (i - startDayIdx) * printDayWidth;
-
-                                    const yStr = d.date.getUTCFullYear().toString().slice(-2);
-                                    const mStr = d.date.toLocaleString('default', { month: 'short', timeZone: 'UTC' }) + ' \'' + yStr;
-                                    if (mStr !== currentMonthStr || i === endDayIdx) {
-                                        if (currentMonthStr !== "") {
-                                            doc.text(currentMonthStr, monthStartX + 2, startY + 12);
-                                            doc.setDrawColor(203, 213, 225);
-                                            doc.line(x, startY, x, startY + 15);
-                                        }
-                                        currentMonthStr = mStr;
-                                        monthStartX = x;
-                                    }
-
-                                    if (printDayWidth > 15) {
-                                        doc.setTextColor(100, 116, 139);
-                                        doc.text(`${d.date.getUTCDate()}`, x + (printDayWidth / 2), startY + 25, { align: 'center' });
-                                    } else if (d.date.getUTCDay() === 1) {
-                                        doc.setTextColor(148, 163, 184);
-                                        doc.text(`${d.date.getUTCMonth() + 1}/${d.date.getUTCDate()}`, x + 2, startY + 25);
-                                    }
-                                }
-
-                                doc.setDrawColor(226, 232, 240);
-                                doc.line(margin, startY + 30, pageWidth - margin, startY + 30);
-
-                                const startRow = v * maxRowsPerPage;
-                                let endRow = Math.min(rows.length, startRow + maxRowsPerPage);
-
-                                // Draw Weekend Shading and Vertical Lines
-                                for (let i = startDayIdx; i <= endDayIdx; i++) {
-                                    if (i >= timelineHeaders.days.length) break;
-                                    const d = timelineHeaders.days[i];
-                                    const x = timelineX + (i - startDayIdx) * printDayWidth;
-
-                                    // 1. Shading
-                                    if (d.isWeekend || d.isHoliday) {
-                                        doc.setFillColor(d.isHoliday ? 254 : 248, d.isHoliday ? 242 : 250, d.isHoliday ? 242 : 252);
-                                        doc.rect(x, startY + 30, printDayWidth, (endRow - startRow) * rowHeight, 'F');
-                                        doc.setDrawColor(241, 245, 249);
-                                        doc.line(x, startY + 30, x, startY + 30 + (endRow - startRow) * rowHeight);
-                                    }
-
-                                    // 2. Vertical Lines
-                                    if (d.date.getUTCDay() === 1) { // Monday / Week Start
-                                        doc.setDrawColor(226, 232, 240); // subtle week line
-                                        doc.line(x, startY + 20, x, startY + 30 + (endRow - startRow) * rowHeight);
-                                    } else if (printDayWidth > 10 && !d.isWeekend && !d.isHoliday) { // Daily lines if zoomed in
-                                        doc.setDrawColor(245, 248, 250); // ultra light
-                                        doc.line(x, startY + 30, x, startY + 30 + (endRow - startRow) * rowHeight);
-                                    }
-                                }
-
-                                // Draw Rows
-                                startY += 30;
-                                for (let r = startRow; r < endRow; r++) {
-                                    const row = rows[r];
-                                    const isPhase = row.type === 'phase';
-                                    const y = startY + (r - startRow) * rowHeight;
-
-                                    if ((r - startRow) % 2 === 1 && !isPhase) {
-                                        doc.setFillColor(248, 250, 252);
-                                        doc.rect(margin, y, tableWidth, rowHeight, 'F');
-                                    }
-
-                                    if (isPhase) {
-                                        doc.setFillColor(241, 245, 249);
-                                        doc.rect(margin, y, pageWidth - margin * 2, rowHeight, 'F');
-                                        if (h === 0) {
-                                            doc.setFont("helvetica", "bold");
-                                            doc.setTextColor(15, 23, 42);
-                                            doc.setFontSize(10);
-                                            doc.text(row.phase, colName + 5 + (row.level * 6), y + 15);
-                                        }
-                                    } else {
-                                        if (h === 0) {
-                                            const t = row.task;
-                                            const isMS = t.milestone > 0;
-
-                                            doc.setFont("helvetica", isMS ? "bold" : "normal");
-                                            if (t.milestone === 2) {
-                                                doc.setTextColor(5, 150, 105); // emerald-600
-                                            } else if (t.milestone === 1) {
-                                                doc.setTextColor(217, 119, 6); // amber-600
-                                            } else {
-                                                doc.setTextColor(51, 65, 85); // slate-700
-                                            }
-                                            doc.setFontSize(9);
-
-                                            let nameDisp = t.name;
-                                            if (nameDisp.length > 25) nameDisp = nameDisp.substring(0, 23) + '...';
-                                            doc.text(nameDisp, colName + 15 + (row.level * 6), y + 14);
-
-                                            doc.setFont("helvetica", "normal");
-                                            doc.setTextColor(51, 65, 85);
-
-                                            let partyDisp = t.party;
-                                            if (partyDisp.length > 10) partyDisp = partyDisp.substring(0, 8) + '...';
-                                            doc.text(partyDisp, colParty, y + 14);
-
-                                            const durLabel = isMS ? 'M' : `${durationUnit === 'Weeks' ? Math.ceil(t.duration / (durationType === 'Business' ? 5 : 7)) : t.duration}${durationUnit.charAt(0)}`;
-                                            doc.text(durLabel, colDur, y + 14);
-
-                                            doc.setFont("helvetica", isMS ? "bold" : "normal");
-                                            if (t.milestone === 2) {
-                                                doc.setTextColor(5, 150, 105); // emerald-600
-                                            } else if (t.milestone === 1) {
-                                                doc.setTextColor(217, 119, 6); // amber-600
-                                            } else {
-                                                doc.setTextColor(51, 65, 85); // slate-700
-                                            }
-                                            doc.text(formatShortDate(t.start), colStart, y + 14);
-                                        }
-
-                                        const t = row.task;
-                                        const endDateStr = calculateEndDate(t.start, t.duration, durationType);
-                                        const tStartIdx = Math.max(0, diffDays(timelineBounds.start.toISOString().split('T')[0], t.start));
-                                        const tEndIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], endDateStr);
-
-                                        if (tEndIdx >= 0 && tStartIdx < pdfTotalDays) {
-                                            const colorStr = t.color || phaseColors[row.phase] || '#94a3b8';
-                                            const rgb = hexToRgb(colorStr);
-
-                                            let segments = [];
-                                            if (viewMode === 'Business' && t.milestone === 0) {
-                                                let currentSegStart = null;
-                                                let current = parseDate(t.start);
-                                                const endD = parseDate(endDateStr);
-                                                while (current <= endD) {
-                                                    const dStr = current.toISOString().split('T')[0];
-                                                    if (!isNonWorkingDay(dStr, 'Business')) {
-                                                        if (!currentSegStart) currentSegStart = dStr;
-                                                    } else {
-                                                        if (currentSegStart) { segments.push({ start: currentSegStart, end: addDays(dStr, -1) }); currentSegStart = null; }
-                                                    }
-                                                    current.setUTCDate(current.getUTCDate() + 1);
-                                                }
-                                                if (currentSegStart) segments.push({ start: currentSegStart, end: endDateStr });
-                                            } else {
-                                                segments.push({ start: t.start, end: endDateStr });
-                                            }
-
-                                            if (t.milestone > 0) {
-                                                if (t.color) {
-                                                    const rgbMs = hexToRgb(t.color);
-                                                    doc.setFillColor(rgbMs.r, rgbMs.g, rgbMs.b);
-                                                } else if (t.milestone === 2) {
-                                                    doc.setFillColor(16, 185, 129); // emerald-500
-                                                } else {
-                                                    doc.setFillColor(251, 191, 36); // amber-400
-                                                }
-                                                const cx = timelineX + (tStartIdx - startDayIdx) * printDayWidth + (printDayWidth / 2);
-                                                const cy = y + (rowHeight / 2);
-                                                const size = 5;
-                                                doc.triangle(cx, cy - size, cx + size, cy, cx, cy + size, 'F');
-                                                doc.triangle(cx, cy - size, cx - size, cy, cx, cy + size, 'F');
-                                            } else {
-                                                if (segments.length > 1) {
-                                                    const overallDrawStartIdx = Math.max(startDayIdx, tStartIdx);
-                                                    const overallDrawEndIdx = Math.min(endDayIdx, tEndIdx);
-                                                    if (overallDrawEndIdx >= overallDrawStartIdx) {
-                                                        doc.setFillColor(Math.floor(rgb.r + (255 - rgb.r) * 0.8), Math.floor(rgb.g + (255 - rgb.g) * 0.8), Math.floor(rgb.b + (255 - rgb.b) * 0.8));
-                                                        const oXStart = timelineX + (overallDrawStartIdx - startDayIdx) * printDayWidth;
-                                                        const oXEnd = timelineX + ((overallDrawEndIdx + 1) - startDayIdx) * printDayWidth;
-                                                        doc.roundedRect(oXStart, y + 4, Math.max(oXEnd - oXStart, 2), rowHeight - 8, 2, 2, 'F');
-                                                    }
-                                                }
-
-                                                segments.forEach(seg => {
-                                                    const segStartIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.start);
-                                                    const segEndIdx = diffDays(timelineBounds.start.toISOString().split('T')[0], seg.end);
-
-                                                    if (segEndIdx >= startDayIdx && segStartIdx <= endDayIdx) {
-                                                        const drawStartIdx = Math.max(startDayIdx, segStartIdx);
-                                                        const drawEndIdx = Math.min(endDayIdx, segEndIdx);
-
-                                                        const xStart = timelineX + (drawStartIdx - startDayIdx) * printDayWidth;
-                                                        const xEnd = timelineX + ((drawEndIdx + 1) - startDayIdx) * printDayWidth;
-                                                        let width = xEnd - xStart;
-
-                                                        doc.setFillColor(rgb.r, rgb.g, rgb.b);
-                                                        if (width < 2) width = 2; // minimum readable width
-                                                        doc.roundedRect(xStart, y + 4, width, rowHeight - 8, 2, 2, 'F');
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    }
-
-                                    doc.setDrawColor(226, 232, 240);
-                                    if (h === 0) {
-                                        doc.line(colParty - 5, y, colParty - 5, y + rowHeight);
-                                        doc.line(colDur - 5, y, colDur - 5, y + rowHeight);
-                                        doc.line(colStart - 5, y, colStart - 5, y + rowHeight);
-                                    }
-                                    doc.line(timelineX, y, timelineX, y + rowHeight);
-                                }
-
-                                // Bottom bounding line
-                                doc.setDrawColor(203, 213, 225);
-                                doc.line(margin, startY + (endRow - startRow) * rowHeight, pageWidth - margin, startY + (endRow - startRow) * rowHeight);
-
-                                pageNum++;
-                            }
-                        }
-                    }
-
-                    const pdfBlob = doc.output('blob');
-                    const url = URL.createObjectURL(pdfBlob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `${activeProject.name.replace(/\s+/g, '_')}_Schedule.pdf`;
-                    a.click();
-                    setTimeout(() => URL.revokeObjectURL(url), 100);
-                } catch (err) {
-                    console.error(err);
-                    alert("Failed to export PDF! " + err.message);
-                }
-                setIsExporting(false);
-                setShowExportModal(false);
-            };
 
             return (
                 <div className={`flex flex-col h-screen font-sans transition-colors ${isDarkMode ? 'dark bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-800'} ${(resizingCol || resizingTimeline || resizingPanel) ? 'select-none' : ''} ${dragTaskState ? 'select-none' : ''}`}>
@@ -1943,6 +1983,9 @@
                             <div className="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
 
                             <div className="flex items-center space-x-2">
+                                <button onClick={() => setShowViewModal(true)} className="flex items-center space-x-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm" title="View Settings">
+                                    <Eye className="w-4 h-4" /> <span>View</span>
+                                </button>
                                 <button onClick={() => setShowShiftModal(true)} className="flex items-center space-x-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm" title="Shift Schedule">
                                     <CalendarDays className="w-4 h-4" /> <span>Shift</span>
                                 </button>
@@ -1962,11 +2005,18 @@
                             <div className="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
 
                             <div className="flex items-center space-x-2">
-                                <Filter className="w-4 h-4 text-slate-400" />
-                                <select className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-700 dark:text-slate-200" value={filterPhase} onChange={(e) => setFilterPhase(e.target.value)}>
-                                    <option value="All">All Phases</option>
-                                    {phases.map(p => <option key={p} value={p}>{p}</option>)}
-                                </select>
+                                <div className="relative flex items-center justify-center w-[30px] h-[30px] rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer group shadow-sm" title={filterPhase === 'All' ? 'Filter Phase (All)' : `Filter Phase (${filterPhase})`}>
+                                    <Filter className="w-4 h-4 text-slate-500 dark:text-slate-400 group-hover:text-indigo-500 transition-colors" />
+                                    <select className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={filterPhase} onChange={(e) => setFilterPhase(e.target.value)}>
+                                        <option value="All">All Phases</option>
+                                        {phases.map(p => <option key={p} value={p}>{p}</option>)}
+                                    </select>
+                                    {filterPhase !== 'All' && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-indigo-500 rounded-full border border-white dark:border-slate-800"></div>}
+                                </div>
+
+                                <button onClick={() => setAlwaysShowTaskNames(!alwaysShowTaskNames)} className={`flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition-all border shadow-sm ${alwaysShowTaskNames ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`} title="Toggle Gantt task names visibility">
+                                    Names
+                                </button>
                             </div>
 
                             <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors">
@@ -2020,7 +2070,7 @@
                                                         const path = `M ${x1},${y1} C ${x1 + 40},${y1} ${x2 + 40},${y2} ${x2},${y2}`;
 
                                                         return (
-                                                            <g key={`lp-${depId}-${task.id}`} className="link-hit-group">
+                                                            <g key={`lp-${depId}-${task.id}`} className="link-hit-group" onMouseLeave={(e) => { if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.left-task-hitbox, .link-hit-group')) return; setPanelHoveredTask(null); }}>
                                                                 <path d={path} stroke="transparent" strokeWidth="14" fill="none" style={{ pointerEvents: 'auto', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); linkTasks(depId, task.id); }} />
                                                                 <path d={path} stroke={isDarkMode ? '#6366f1' : '#4f46e5'} strokeWidth="2" fill="none" style={{ pointerEvents: 'none' }} className="link-visible-path transition-colors" />
                                                             </g>
@@ -2031,10 +2081,10 @@
 
                                             {/* Grid Header */}
                                             <div className="flex items-center h-[64px] bg-slate-50 dark:bg-slate-800/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider sticky top-0 z-30 shadow-sm">
-                                                <div className="w-8 flex-shrink-0"></div>
-                                                {['name', 'party', 'duration', 'start', 'end'].map(col => (
-                                                    <div key={col} style={{ width: colWidths[col] }} className="px-3 relative flex items-center flex-shrink-0">
-                                                        {col === 'name' ? 'Task Name' : col === 'party' ? 'Party' : col === 'duration' ? `Dur (${durationUnit})` : col === 'start' ? 'Start Date' : 'End Date'}
+                                                <div className="w-6 flex-shrink-0"></div>
+                                                {visibleCols.map(col => (
+                                                    <div key={col} style={{ width: colWidths[col] }} className={`${col === 'name' ? 'px-1' : 'px-2'} relative flex items-center flex-shrink-0`}>
+                                                        {col === 'name' ? 'Task Name' : col === 'party' ? 'Party' : col === 'duration' ? `Dur (${viewMode === 'Days' ? 'Cal' : viewMode === 'Weeks' ? 'Wks' : 'Bus'})` : col === 'start' ? 'Start Date' : 'End Date'}
                                                         <div className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-300 dark:hover:bg-indigo-600 z-10 -mr-1 transition-colors" onMouseDown={(e) => { e.preventDefault(); setResizingCol({ col, startX: e.clientX, startWidth: colWidths[col] }); }} />
                                                     </div>
                                                 ))}
@@ -2045,18 +2095,25 @@
                                                 const phase = rp.phase;
                                                 const level = rp.level;
                                                 const hasChildren = rp.hasChildren;
-                                                const isExpanded = expandedPhases[phase];
+                                                const hasItems = hasChildren || (tasksByPhase[phase] && tasksByPhase[phase].length > 0);
+                                                const isExpanded = expandedPhases[phase] !== false;
                                                 const pBounds = phaseBounds[phase];
                                                 let phaseDisplayDur = 0;
                                                 if (pBounds) {
-                                                    const dur = getDurationBetweenDates(pBounds.minS, pBounds.maxE, durationType);
-                                                    phaseDisplayDur = durationUnit === 'Weeks' ? Math.ceil(dur / (durationType === 'Business' ? 5 : 7)) : dur;
+                                                    if (viewMode === 'Weeks') {
+                                                        const dur = getDurationBetweenDates(pBounds.minS, pBounds.maxE, 'Business');
+                                                        phaseDisplayDur = Math.ceil(dur / 5);
+                                                    } else if (viewMode === 'Days') {
+                                                        phaseDisplayDur = getDurationBetweenDates(pBounds.minS, pBounds.maxE, 'Calendar');
+                                                    } else {
+                                                        phaseDisplayDur = getDurationBetweenDates(pBounds.minS, pBounds.maxE, 'Business');
+                                                    }
                                                 }
 
-                                                const isPhaseDragTarget = dragOverTarget?.id === phase && dragOverTarget?.type === 'phase';
-                                                const isInside = isPhaseDragTarget && dragOverTarget.action === 'inside';
-                                                const isBefore = isPhaseDragTarget && dragOverTarget.action === 'before';
-                                                const isAfter = isPhaseDragTarget && dragOverTarget.action === 'after';
+                                                const isPhaseDragTarget = dragOverTarget?.id === phase && dragOverTarget?.targetType === 'phase';
+                                                const isInside = isPhaseDragTarget && dragOverTarget.position === 'inside';
+                                                const isBefore = isPhaseDragTarget && dragOverTarget.position === 'before';
+                                                const isAfter = isPhaseDragTarget && dragOverTarget.position === 'after';
 
                                                 return (
                                                     <div key={phase} className="mb-0">
@@ -2067,64 +2124,123 @@
                                                                 e.preventDefault();
                                                                 const rect = e.currentTarget.getBoundingClientRect();
                                                                 const relativeY = e.clientY - rect.top;
-                                                                let action = 'inside';
-                                                                if (relativeY < rect.height * 0.25) action = 'before';
-                                                                else if (relativeY > rect.height * 0.75) action = 'after';
-                                                                setDragOverTarget({ id: phase, type: 'phase', action });
+                                                                let position = 'inside';
+                                                                if (relativeY < rect.height * 0.33) position = 'before';
+                                                                else if (relativeY > rect.height * 0.67) position = 'after';
+                                                                setDragOverTarget({ id: phase, targetType: 'phase', position });
                                                             }}
                                                             onDragLeave={() => setDragOverTarget(null)}
                                                             onDrop={(e) => handleItemDrop(e, phase, 'phase', phase)}
-                                                            className={`flex items-center h-10 bg-white dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700/50 group transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 cursor-grab ${isBefore ? 'border-t-2 border-t-indigo-500' : ''} ${isAfter ? 'border-b-2 border-b-indigo-500' : ''} ${isInside ? 'bg-indigo-50 dark:bg-indigo-900/30' : ''}`}
+                                                            className={`flex items-center border-b border-slate-100 dark:border-slate-700/50 group transition-colors cursor-grab ${isBefore ? 'border-t-2 border-t-indigo-500' : ''} ${isAfter ? 'border-b-2 border-b-indigo-500' : ''} ${isInside ? 'bg-indigo-50/10 dark:bg-indigo-900/10' : ''}`}
+                                                            style={{ backgroundColor: `${phaseColors[phase] || '#94a3b8'}30`, height: `${rowHeight}px`, fontSize: `${textSize}px` }}
                                                             onClick={() => setExpandedPhases(p => ({ ...p, [phase]: !p[phase] }))}
                                                         >
-                                                            <div className="w-8 flex justify-center text-slate-400 flex-shrink-0 relative" style={{ marginLeft: `${level * 16}px` }}>
-                                                                {hasChildren ? (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />) : <div className="w-4 h-4" />}
+                                                            <div className="flex-shrink-0 self-stretch" style={{ width: '3px', marginLeft: `${level * 24}px` }}></div>
+                                                            <div className="w-5 flex justify-center text-slate-400 flex-shrink-0 relative">
+                                                                {hasItems ? (isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />) : <div className="w-3.5 h-3.5" />}
                                                             </div>
 
-                                                            <div style={{ width: colWidths.name - (level * 16) }} className="px-2 flex items-center flex-shrink-0">
-                                                                <input type="color" value={phaseColors[phase] || '#94a3b8'} onChange={(e) => { e.stopPropagation(); const val = e.target.value; updateVersion(null, null, prev => ({ ...prev, [phase]: val })); }} onClick={(e) => e.stopPropagation()} className="w-4 h-4 p-0 border-0 rounded cursor-pointer mr-2 bg-transparent shadow-sm flex-shrink-0" />
-                                                                <span className="font-bold text-sm text-slate-800 dark:text-slate-200 truncate pr-2">{phase}</span>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleDeletePhase(phase); }} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 rounded transition-all ml-auto mr-1"><Trash2 className="w-3.5 h-3.5" /></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); addTask(phase); setExpandedPhases(p => ({ ...p, [phase]: true })); }} className="opacity-0 group-hover:opacity-100 p-1 bg-indigo-50 dark:bg-indigo-900/50 hover:bg-indigo-100 dark:hover:bg-indigo-800 text-indigo-600 dark:text-indigo-400 rounded transition-all"><Plus className="w-3.5 h-3.5" /></button>
+                                                            <div style={{ width: colWidths.name - (level * 24) - 2 }} className="px-1 flex items-center flex-shrink-0">
+                                                                <input type="color" value={phaseColors[phase] || '#94a3b8'} onChange={(e) => { e.stopPropagation(); const val = e.target.value; updateVersion(null, null, prev => ({ ...prev, [phase]: val })); }} onClick={(e) => e.stopPropagation()} className="w-3.5 h-3.5 p-0 border-0 rounded cursor-pointer mr-1.5 bg-transparent shadow-sm flex-shrink-0" />
+                                                                {editingPhase && editingPhase.oldName === phase ? (
+                                                                    <input
+                                                                        autoFocus
+                                                                        type="text"
+                                                                        value={editingPhase.tempName}
+                                                                        onClick={e => e.stopPropagation()}
+                                                                        onChange={e => setEditingPhase({ ...editingPhase, tempName: e.target.value })}
+                                                                        onKeyDown={e => {
+                                                                            if (e.key === 'Enter') {
+                                                                                e.preventDefault();
+                                                                                e.stopPropagation();
+                                                                                handleRenamePhaseSubmit();
+                                                                            } else if (e.key === 'Escape') {
+                                                                                setEditingPhase(null);
+                                                                            }
+                                                                        }}
+                                                                        onBlur={handleRenamePhaseSubmit}
+                                                                        className="font-bold text-sm text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-900 border border-indigo-500 rounded px-1 -ml-1 outline-none w-full max-w-[150px]"
+                                                                    />
+                                                                ) : (
+                                                                    <span
+                                                                        className="font-bold text-sm text-slate-800 dark:text-slate-200 truncate pr-1 cursor-text hover:text-indigo-600 dark:hover:text-indigo-400"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setEditingPhase({ oldName: phase, tempName: phase });
+                                                                        }}
+                                                                    >
+                                                                        {phase}
+                                                                    </span>
+                                                                )}
+                                                                <button onClick={(e) => { e.stopPropagation(); handleDeletePhase(phase); }} className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 rounded transition-all ml-auto"><Trash2 className="w-3 h-3" /></button>
+                                                                <button onClick={(e) => { e.stopPropagation(); addTask(phase); setExpandedPhases(p => ({ ...p, [phase]: true })); }} className="opacity-0 group-hover:opacity-100 p-0.5 bg-indigo-50 dark:bg-indigo-900/50 hover:bg-indigo-100 dark:hover:bg-indigo-800 text-indigo-600 dark:text-indigo-400 rounded transition-all ml-0.5"><Plus className="w-3 h-3" /></button>
                                                             </div>
 
-                                                            <div style={{ width: colWidths.party }} className="px-2 flex-shrink-0"></div>
-                                                            <div style={{ width: colWidths.duration }} className="px-2 text-center flex-shrink-0 text-xs font-semibold text-slate-400 bg-slate-50 dark:bg-slate-900/50 py-1 rounded">{phaseDisplayDur}</div>
-                                                            <div style={{ width: colWidths.start }} className="px-2 pr-4 flex-shrink-0 text-xs font-semibold text-slate-400">{pBounds ? formatShortDate(pBounds.minS) : ''}</div>
-                                                            <div style={{ width: colWidths.end }} className="px-2 pr-4 flex-shrink-0 text-xs font-semibold text-slate-400">{pBounds ? formatShortDate(pBounds.maxE) : ''}</div>
+                                                            {columnVisibility.party && <div style={{ width: colWidths.party }} className="px-1 flex-shrink-0"></div>}
+                                                            {columnVisibility.duration && <div style={{ width: colWidths.duration }} className="px-1 flex-shrink-0">
+                                                                <div className="relative w-full flex items-center justify-center text-xs font-semibold text-slate-500 dark:text-slate-400 py-0.5 rounded" style={{ backgroundColor: `${phaseColors[phase] || '#94a3b8'}20` }}>
+                                                                    <span className="pr-3 text-center">{phaseDisplayDur}</span>
+                                                                    <span className="absolute right-2 text-[10px] font-medium text-slate-400">{viewMode === 'Weeks' ? 'w' : 'd'}</span>
+                                                                </div>
+                                                            </div>}
+                                                            {columnVisibility.start && <div style={{ width: colWidths.start }} className="px-1 pr-2 flex-shrink-0 text-xs font-semibold text-slate-400">{pBounds ? formatShortDate(pBounds.minS) : ''}</div>}
+                                                            {columnVisibility.end && <div style={{ width: colWidths.end }} className="px-1 pr-2 flex-shrink-0 text-xs font-semibold text-slate-400">{pBounds ? formatShortDate(pBounds.maxE) : ''}</div>}
                                                         </div>
 
                                                         {isExpanded && tasksByPhase[phase] && tasksByPhase[phase].map(task => {
                                                             const taskWarning = isNonWorkingDay(task.start, durationType);
-                                                            const displayDur = durationUnit === 'Weeks' ? Math.ceil(task.duration / (durationType === 'Business' ? 5 : 7)) : task.duration;
                                                             const endDateStr = calculateEndDate(task.start, task.duration, durationType);
+                                                            let displayDur = task.duration;
+                                                            if (viewMode === 'Weeks') {
+                                                                displayDur = Math.ceil(task.duration / 5);
+                                                            } else if (viewMode === 'Days') {
+                                                                displayDur = getDurationBetweenDates(task.start, endDateStr, 'Calendar');
+                                                            }
 
                                                             const mType = task.milestone || 0;
                                                             const flagColor = mType === 2 ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : mType === 1 ? 'text-amber-500 bg-amber-50 dark:bg-amber-900/20' : 'text-slate-300 dark:text-slate-600 hover:text-slate-500 opacity-0 group-hover:opacity-100';
                                                             const nameColor = mType === 2 ? 'font-extrabold text-emerald-700 dark:text-emerald-400' : mType === 1 ? 'font-bold text-slate-900 dark:text-slate-100' : 'font-medium text-slate-700 dark:text-slate-300';
+
+                                                            const isTaskDragTarget = dragOverTarget?.id === task.id;
+                                                            const isTaskBefore = isTaskDragTarget && dragOverTarget.position === 'before';
+                                                            const isTaskAfter = isTaskDragTarget && dragOverTarget.position === 'after';
 
                                                             return (
                                                                 <div
                                                                     key={task.id}
                                                                     draggable
                                                                     onDragStart={(e) => { e.dataTransfer.setData('type', 'task'); setDraggedItem({ type: 'task', id: task.id }); }}
-                                                                    onDragOver={(e) => { e.preventDefault(); setDragOverTarget(task.id); }}
+                                                                    onDragOver={(e) => {
+                                                                        e.preventDefault();
+                                                                        const rect = e.currentTarget.getBoundingClientRect();
+                                                                        const relativeY = e.clientY - rect.top;
+                                                                        const position = relativeY < rect.height * 0.5 ? 'before' : 'after';
+                                                                        setDragOverTarget({ id: task.id, targetType: 'task', position, phase });
+                                                                    }}
                                                                     onDragLeave={() => setDragOverTarget(null)}
-                                                                    onDrop={(e) => handleItemDrop(e, task.id, 'task', phase)}
+                                                                    onDrop={(e) => {
+                                                                        if (draggedItem?.type === 'phase') {
+                                                                            handleItemDrop(e, task.id, 'task', phase);
+                                                                        } else {
+                                                                            handleItemDrop(e, task.id, 'task', phase);
+                                                                        }
+                                                                    }}
                                                                     onMouseEnter={() => setPanelHoveredTask(task.id)}
-                                                                    onMouseLeave={() => setPanelHoveredTask(null)}
+                                                                    onMouseLeave={(e) => { if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.link-hit-group')) return; setPanelHoveredTask(null); }}
                                                                     onFocus={(e) => setFocusedTask(task.id)}
                                                                     onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocusedTask(null); }}
-                                                                    className={`flex items-center border-b border-slate-50 dark:border-slate-700/30 group text-sm h-[44px] transition-colors cursor-grab left-task-hitbox ${dragOverTarget === task.id ? 'border-t-2 border-t-indigo-500 bg-indigo-50/10 dark:bg-indigo-900/20' : ''} ${activeTaskId === task.id ? 'bg-indigo-50 dark:bg-indigo-900/40' : 'hover:bg-indigo-50/50 dark:hover:bg-indigo-900/50'}`}
+                                                                    className={`flex items-center border-b border-slate-50 dark:border-slate-700/30 group text-sm transition-colors cursor-grab left-task-hitbox ${isTaskBefore ? 'border-t-2 border-t-indigo-500' : ''} ${isTaskAfter ? 'border-b-2 border-b-indigo-500' : ''} ${activeTaskId === task.id ? 'bg-indigo-50 dark:bg-indigo-900/40' : 'hover:bg-indigo-50/50 dark:hover:bg-indigo-900/50'}`}
+                                                                    style={{ height: `${rowHeight}px`, fontSize: `${textSize}px` }}
                                                                     data-taskid={task.id}
                                                                 >
-                                                                    <div className="w-8 flex items-center justify-center flex-shrink-0" style={{ marginLeft: `${level * 16}px` }}>
+                                                                    <div className="flex-shrink-0 self-stretch" style={{ width: '3px', marginLeft: `${level * 24}px` }}></div>
+                                                                    <div className="w-5 flex items-center justify-center flex-shrink-0 relative">
                                                                         <button onClick={() => deleteTask(task.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-opacity absolute ml-6 z-10 bg-white dark:bg-slate-800 rounded shadow-sm p-0.5 border border-slate-100 dark:border-slate-700"><Trash2 className="w-3.5 h-3.5" /></button>
                                                                     </div>
-                                                                    <div style={{ width: colWidths.name - (level * 16) }} className="px-2 flex-shrink-0 relative">
-                                                                        <div className="flex items-center pl-6 pr-6">
-                                                                            <button onClick={() => cycleMilestone(task.id)} className={`flex-shrink-0 p-1 rounded-md transition-colors ${flagColor}`} title="Toggle Milestone"><Flag className="w-3.5 h-3.5" /></button>
-                                                                            <input type="text" value={task.name} onChange={(e) => handleTaskChange(task.id, 'name', e.target.value)} className={`w-full bg-transparent border-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded px-1.5 py-1 transition-all ${nameColor}`} />
+                                                                    <div style={{ width: colWidths.name - (level * 24) - 2 }} className="px-1 flex-shrink-0 relative">
+                                                                        <div className="flex items-center pl-1 pr-1">
+                                                                            <button onClick={() => cycleMilestone(task.id)} className={`flex-shrink-0 p-0.5 rounded-md transition-colors ${flagColor}`} title="Toggle Milestone"><Flag className="w-3.5 h-3.5" /></button>
+                                                                            <input type="text" value={task.name} onChange={(e) => handleTaskChange(task.id, 'name', e.target.value)} className={`w-full bg-transparent border-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded px-1 py-1 transition-all ${nameColor}`} />
                                                                         </div>
                                                                         {activeTaskId === task.id && (
                                                                             <div className="absolute top-1/2 -translate-y-1/2 right-2 h-4 w-4 bg-white dark:bg-slate-800 border-2 border-indigo-500 rounded-full z-40 cursor-crosshair shadow-sm flex items-center justify-center transition-opacity" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const container = document.getElementById('pdf-left-panel').querySelector('.overflow-y-auto'); const rect = container.getBoundingClientRect(); const startX = e.clientX - rect.left + container.scrollLeft; const startY = (e.clientY - rect.top + container.scrollTop) - 64; setLinkingState({ sourceId: task.id, startX, startY, currentX: startX, currentY: startY, panel: 'left' }); }} title="Drag to link to another task">
@@ -2132,22 +2248,45 @@
                                                                             </div>
                                                                         )}
                                                                     </div>
-                                                                    <div style={{ width: colWidths.party }} className="px-2 flex-shrink-0">
-                                                                        <select value={task.party} onChange={(e) => handleTaskChange(task.id, 'party', e.target.value)} className="w-full bg-transparent border-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs text-slate-500 dark:text-slate-400 font-medium cursor-pointer">
+                                                                    {columnVisibility.party && <div style={{ width: colWidths.party }} className="px-1 flex-shrink-0">
+                                                                        <select value={task.party} onChange={(e) => handleTaskChange(task.id, 'party', e.target.value)} className={`w-full bg-transparent border-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs cursor-pointer ${mType === 2 ? 'font-extrabold text-emerald-700 dark:text-emerald-400' : mType === 1 ? 'font-bold text-slate-900 dark:text-slate-100' : 'font-medium text-slate-500 dark:text-slate-400'}`}>
+                                                                            <option value=""></option>
                                                                             <option value="All">All</option>
                                                                             {PARTIES.map(p => <option key={p} value={p}>{p}</option>)}
                                                                         </select>
-                                                                    </div>
-                                                                    <div style={{ width: colWidths.duration }} className="px-2 text-center flex-shrink-0">
-                                                                        <input type="number" min="0" value={displayDur} onChange={(e) => handleTaskChange(task.id, 'duration', durationUnit === 'Weeks' ? (parseInt(e.target.value) || 0) * (durationType === 'Business' ? 5 : 7) : parseInt(e.target.value) || 0)} disabled={mType > 0} className={`w-full text-center bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded py-1 disabled:opacity-30 font-semibold ${mType > 0 ? 'text-slate-300 dark:text-slate-600' : 'text-slate-700 dark:text-slate-200'}`} />
-                                                                    </div>
-                                                                    <div style={{ width: colWidths.start }} className="px-2 pr-4 flex-shrink-0 relative">
-                                                                        <input type="text" value={formatShortDate(task.start)} onChange={(e) => { const iso = parseShortDate(e.target.value); if (iso) handleTaskChange(task.id, 'start', iso); }} onBlur={(e) => { const iso = parseShortDate(e.target.value); if (!iso) e.target.value = formatShortDate(task.start); }} placeholder="MM/DD/YY" className={`w-full bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs py-1 transition-colors cursor-text ${taskWarning ? 'text-red-600 dark:text-red-400 font-bold' : 'text-slate-600 dark:text-slate-300 font-medium'}`} />
+                                                                    </div>}
+                                                                    {columnVisibility.duration && <div style={{ width: colWidths.duration }} className="px-1 flex-shrink-0">
+                                                                        <div className="relative w-full flex items-center justify-center">
+                                                                            <input type="number" min="0" value={displayDur} onChange={(e) => {
+                                                                                let raw = parseInt(e.target.value) || 0;
+                                                                                let engineDur = raw;
+                                                                                if (viewMode === 'Weeks') engineDur = Math.max(1, raw * 5);
+                                                                                else if (viewMode === 'Days') {
+                                                                                    const calEnd = calculateEndDate(task.start, Math.max(1, raw), 'Calendar');
+                                                                                    engineDur = getDurationBetweenDates(task.start, calEnd, 'Business');
+                                                                                }
+                                                                                handleTaskChange(task.id, 'duration', engineDur);
+                                                                            }} disabled={mType > 0} className={`w-full text-center bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded py-1 pr-3 disabled:opacity-50 ${mType > 0 ? 'font-extrabold' : 'font-semibold'} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${mType === 2 ? 'text-emerald-700 dark:text-emerald-400' : mType === 1 ? 'text-slate-900 dark:text-slate-100' : 'text-slate-700 dark:text-slate-200'}`} />
+                                                                            <span className="absolute right-2 text-[10px] font-medium text-slate-400 pointer-events-none">{viewMode === 'Weeks' ? 'w' : 'd'}</span>
+                                                                        </div>
+                                                                    </div>}
+                                                                    {columnVisibility.start && <div style={{ width: colWidths.start }} className="px-1 pr-2 flex-shrink-0 relative flex items-center group/date">
+                                                                        <input type="text" value={formatShortDate(task.start)} onChange={(e) => { const iso = parseShortDate(e.target.value); if (iso) handleTaskChange(task.id, 'start', iso); }} onBlur={(e) => { const iso = parseShortDate(e.target.value); if (!iso) e.target.value = formatShortDate(task.start); }} placeholder="MM/DD/YY" className={`w-full bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs py-1 transition-colors cursor-text ${taskWarning ? 'text-red-600 dark:text-red-400 font-bold' : mType === 2 ? 'text-emerald-700 dark:text-emerald-400 font-extrabold' : mType === 1 ? 'text-slate-900 dark:text-slate-100 font-bold' : 'text-slate-600 dark:text-slate-300 font-medium'}`} />
                                                                         {taskWarning && <AlertCircle className="w-3.5 h-3.5 text-red-500 absolute right-6 top-1.5 pointer-events-none" title="Starts on a Non-Working Day" />}
-                                                                    </div>
-                                                                    <div style={{ width: colWidths.end }} className="px-2 pr-4 flex-shrink-0 relative">
-                                                                        <input type="text" value={formatShortDate(endDateStr)} onChange={(e) => { const iso = parseShortDate(e.target.value); if (iso) handleTaskChange(task.id, 'duration', getDurationBetweenDates(task.start, iso, durationType)); }} onBlur={(e) => { const iso = parseShortDate(e.target.value); if (!iso) e.target.value = formatShortDate(endDateStr); }} placeholder="MM/DD/YY" disabled={mType > 0} className="w-full bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs py-1 transition-colors cursor-text text-slate-600 dark:text-slate-300 font-medium disabled:opacity-50" />
-                                                                    </div>
+                                                                        <div className="absolute right-1 top-1.5 opacity-0 group-hover/date:opacity-100 transition-opacity">
+                                                                            <Calendar className="w-4 h-4 text-slate-400 hover:text-indigo-500 transition-colors" />
+                                                                            <input type="date" value={task.start} onChange={(e) => e.target.value && handleTaskChange(task.id, 'start', e.target.value)} onClick={(e) => e.stopPropagation()} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                                                        </div>
+                                                                    </div>}
+                                                                    {columnVisibility.end && <div style={{ width: colWidths.end }} className="px-1 pr-2 flex-shrink-0 relative flex items-center group/date">
+                                                                        <input type="text" value={formatShortDate(endDateStr)} onChange={(e) => { const iso = parseShortDate(e.target.value); if (iso) handleTaskChange(task.id, 'duration', getDurationBetweenDates(task.start, iso, durationType)); }} onBlur={(e) => { const iso = parseShortDate(e.target.value); if (!iso) e.target.value = formatShortDate(endDateStr); }} placeholder="MM/DD/YY" disabled={mType > 0} className={`w-full bg-transparent border border-transparent hover:border-slate-200 dark:hover:border-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-900 rounded text-xs py-1 transition-colors cursor-text ${mType === 2 ? 'text-emerald-700 dark:text-emerald-400 font-extrabold' : mType === 1 ? 'text-slate-900 dark:text-slate-100 font-bold' : 'text-slate-600 dark:text-slate-300 font-medium'} disabled:opacity-50`} />
+                                                                        {mType === 0 && (
+                                                                            <div className="absolute right-1 top-1.5 opacity-0 group-hover/date:opacity-100 transition-opacity">
+                                                                                <Calendar className="w-4 h-4 text-slate-400 hover:text-indigo-500 transition-colors" />
+                                                                                <input type="date" value={endDateStr} onChange={(e) => e.target.value && handleTaskChange(task.id, 'duration', getDurationBetweenDates(task.start, e.target.value, durationType))} onClick={(e) => e.stopPropagation()} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                                                            </div>
+                                                                        )}
+                                                                    </div>}
                                                                 </div>
                                                             )
                                                         })}
@@ -2246,13 +2385,13 @@
                                             <div className="pt-0">
                                                 {renderPhases.map(rp => {
                                                     const phase = rp.phase;
-                                                    const isExpanded = expandedPhases[phase];
+                                                    const isExpanded = expandedPhases[phase] !== false;
                                                     const pBounds = phaseBounds[phase];
 
-                                                    const isPhaseDragTarget = dragOverTarget?.id === phase && dragOverTarget?.type === 'phase';
-                                                    const isInside = isPhaseDragTarget && dragOverTarget.action === 'inside';
-                                                    const isBefore = isPhaseDragTarget && dragOverTarget.action === 'before';
-                                                    const isAfter = isPhaseDragTarget && dragOverTarget.action === 'after';
+                                                    const isPhaseDragTarget = dragOverTarget?.id === phase && dragOverTarget?.targetType === 'phase';
+                                                    const isInside = isPhaseDragTarget && dragOverTarget.position === 'inside';
+                                                    const isBefore = isPhaseDragTarget && dragOverTarget.position === 'before';
+                                                    const isAfter = isPhaseDragTarget && dragOverTarget.position === 'after';
 
                                                     return (
                                                         <div
@@ -2264,15 +2403,15 @@
                                                                 e.preventDefault();
                                                                 const rect = e.currentTarget.getBoundingClientRect();
                                                                 const relativeY = e.clientY - rect.top;
-                                                                let action = 'inside';
-                                                                if (relativeY < rect.height * 0.25) action = 'before';
-                                                                else if (relativeY > rect.height * 0.75) action = 'after';
-                                                                setDragOverTarget({ id: phase, type: 'phase', action });
+                                                                let position = 'inside';
+                                                                if (relativeY < rect.height * 0.33) position = 'before';
+                                                                else if (relativeY > rect.height * 0.67) position = 'after';
+                                                                setDragOverTarget({ id: phase, targetType: 'phase', position });
                                                             }}
                                                             onDragLeave={() => setDragOverTarget(null)}
                                                             onDrop={(e) => handleItemDrop(e, phase, 'phase', phase)}
                                                         >
-                                                            <div className="h-10 border-b border-slate-100 dark:border-slate-800 relative flex items-center hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                                                            <div style={{ height: `${rowHeight}px` }} className="border-b border-slate-100 dark:border-slate-800 relative flex items-center hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
                                                                 {pBounds && (
                                                                     <div
                                                                         className={`absolute h-1.5 rounded-full ${dragPhaseState?.phase === phase ? 'opacity-90 dark:opacity-80' : 'opacity-60 dark:opacity-40'} cursor-move hover:h-2 transition-all`}
@@ -2295,7 +2434,12 @@
                                                                 const isMilestone = mType > 0;
                                                                 const endDateStr = calculateEndDate(task.start, task.duration, durationType);
                                                                 const color = task.color || phaseColors[task.phase] || '#94a3b8';
-                                                                const displayDur = durationUnit === 'Weeks' ? Math.ceil(task.duration / (durationType === 'Business' ? 5 : 7)) : task.duration;
+                                                                let displayDur = task.duration;
+                                                                if (viewMode === 'Weeks') {
+                                                                    displayDur = Math.ceil(task.duration / 5);
+                                                                } else if (viewMode === 'Days') {
+                                                                    displayDur = getDurationBetweenDates(task.start, endDateStr, 'Calendar');
+                                                                }
 
                                                                 let segments = [];
                                                                 if (viewMode === 'Business' && !isMilestone) {
@@ -2319,17 +2463,28 @@
                                                                 const msClass = mType === 2 ? 'bg-emerald-500 border-emerald-200 dark:border-emerald-900' : 'bg-amber-400 border-white dark:border-slate-900';
                                                                 const labelClass = mType === 2 ? 'font-extrabold text-emerald-700 dark:text-emerald-400' : mType === 1 ? 'font-bold text-slate-800 dark:text-slate-200' : 'font-bold text-slate-700 dark:text-slate-200';
 
+                                                                const isRtTaskDragTarget = dragOverTarget?.id === task.id;
+                                                                const isRtTaskBefore = isRtTaskDragTarget && dragOverTarget.position === 'before';
+                                                                const isRtTaskAfter = isRtTaskDragTarget && dragOverTarget.position === 'after';
+
                                                                 return (
                                                                     <div
                                                                         key={task.id}
                                                                         draggable
                                                                         onDragStart={(e) => { e.dataTransfer.setData('type', 'task'); setDraggedItem({ type: 'task', id: task.id }); }}
-                                                                        onDragOver={(e) => { e.preventDefault(); setDragOverTarget(task.id); }}
+                                                                        onDragOver={(e) => {
+                                                                            e.preventDefault();
+                                                                            const rect = e.currentTarget.getBoundingClientRect();
+                                                                            const relativeY = e.clientY - rect.top;
+                                                                            const position = relativeY < rect.height * 0.5 ? 'before' : 'after';
+                                                                            setDragOverTarget({ id: task.id, targetType: 'task', position, phase });
+                                                                        }}
                                                                         onDragLeave={() => setDragOverTarget(null)}
                                                                         onDrop={(e) => handleItemDrop(e, task.id, 'task', phase)}
                                                                         onMouseEnter={() => setPanelHoveredTask(task.id)}
-                                                                        onMouseLeave={() => setPanelHoveredTask(null)}
-                                                                        className={`h-[44px] relative flex items-center group border-b border-transparent task-bar-hitbox transition-colors cursor-grab ${dragOverTarget === task.id ? 'border-t-2 border-t-indigo-500 bg-indigo-50/10' : ''} ${activeTaskId === task.id ? 'bg-indigo-50/60 dark:bg-indigo-900/40' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                                                                        onMouseLeave={(e) => { if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.link-hit-group')) return; setPanelHoveredTask(null); }}
+                                                                        className={`relative flex items-center group border-b border-transparent task-bar-hitbox transition-colors cursor-grab ${isRtTaskBefore ? 'border-t-2 border-t-indigo-500' : ''} ${isRtTaskAfter ? 'border-b-2 border-b-indigo-500' : ''} ${activeTaskId === task.id ? 'bg-indigo-50/60 dark:bg-indigo-900/40' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                                                                        style={{ height: `${rowHeight}px` }}
                                                                         data-taskid={task.id}
                                                                         onContextMenu={(e) => handleContextMenu(e, task.id)}
                                                                     >
@@ -2371,9 +2526,9 @@
                                                                                         </div>
                                                                                     )}
                                                                                     {isLast && (
-                                                                                        <div className={`absolute whitespace-nowrap text-xs z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity ${labelClass}`} style={{ left: `${segLeftPos + (isMilestone ? 32 : segBarWidth + 28)}px` }}>
+                                                                                        <div className={`absolute whitespace-nowrap text-xs z-20 pointer-events-none transition-opacity ${alwaysShowTaskNames ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} ${labelClass}`} style={{ left: `${segLeftPos + (isMilestone ? 32 : segBarWidth + 28)}px` }}>
                                                                                             <span className="bg-white/95 dark:bg-slate-800/95 px-2 py-1 rounded-md shadow-sm border border-slate-200 dark:border-slate-700 backdrop-blur-sm">
-                                                                                                {task.name} {!isMilestone && `(${displayDur}${durationUnit.charAt(0)})`}
+                                                                                                {task.name} {!isMilestone && `(${displayDur}${viewMode === 'Weeks' ? 'W' : viewMode === 'Days' ? 'c' : 'b'})`}
                                                                                             </span>
                                                                                         </div>
                                                                                     )}
@@ -2594,6 +2749,78 @@
                                         <div className="flex items-center"><Calendar className="w-5 h-5 mr-3 text-slate-400 group-hover:text-amber-500 transition-colors" /> Export Milestones to Outlook (.ics)</div>
                                         <ChevronRight className="w-4 h-4 opacity-50" />
                                     </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- VIEW SETTINGS MODAL --- */}
+                    {showViewModal && (
+                        <div className="fixed inset-0 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+                            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                                <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+                                    <h2 className="text-lg font-bold text-slate-800 dark:text-white flex items-center"><Eye className="w-5 h-5 mr-2 text-indigo-500" /> View Settings</h2>
+                                    <button onClick={() => setShowViewModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"><X className="w-5 h-5" /></button>
+                                </div>
+
+                                <div className="p-6 space-y-6">
+                                    {/* Row Height */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Row Height</label>
+                                        <div className="flex items-center space-x-3">
+                                            <span className="text-xs font-semibold text-slate-400 w-6">22</span>
+                                            <input type="range" min="22" max="44" value={rowHeight} onChange={(e) => setRowHeight(parseInt(e.target.value))} className="flex-1 accent-indigo-500 h-2 rounded-full cursor-pointer" />
+                                            <span className="text-xs font-semibold text-slate-400 w-6">44</span>
+                                            <div className="bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold px-2.5 py-1 rounded-md min-w-[42px] text-center">{rowHeight}px</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Text Size */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Text Size</label>
+                                        <div className="flex items-center space-x-3">
+                                            <span className="text-xs font-semibold text-slate-400 w-6">10</span>
+                                            <input type="range" min="10" max="16" value={textSize} onChange={(e) => setTextSize(parseInt(e.target.value))} className="flex-1 accent-indigo-500 h-2 rounded-full cursor-pointer" />
+                                            <span className="text-xs font-semibold text-slate-400 w-6">16</span>
+                                            <div className="bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold px-2.5 py-1 rounded-md min-w-[42px] text-center">{textSize}px</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Column Visibility */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Column Visibility</label>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {[
+                                                { key: 'party', label: 'Party' },
+                                                { key: 'duration', label: 'Duration' },
+                                                { key: 'start', label: 'Start Date' },
+                                                { key: 'end', label: 'End Date' }
+                                            ].map(col => (
+                                                <button key={col.key} onClick={() => setColumnVisibility(prev => ({ ...prev, [col.key]: !prev[col.key] }))}
+                                                    className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition-all border shadow-sm ${columnVisibility[col.key] ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300' : 'bg-slate-50 dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-400 dark:text-slate-500'}`}>
+                                                    <span>{col.label}</span>
+                                                    {columnVisibility[col.key] ? <Eye className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* PDF Paper Size */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">PDF Paper Size</label>
+                                        <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700 shadow-inner">
+                                            <button onClick={() => setPdfPaperSize('letter')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${pdfPaperSize === 'letter' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}>
+                                                Letter <span className="text-[10px] font-normal opacity-60">(8.5×11")</span>
+                                            </button>
+                                            <button onClick={() => setPdfPaperSize('tabloid')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${pdfPaperSize === 'tabloid' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}>
+                                                Tabloid <span className="text-[10px] font-normal opacity-60">(11×17")</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="px-6 py-3 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex justify-end">
+                                    <button onClick={() => setShowViewModal(false)} className="px-4 py-1.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors">Done</button>
                                 </div>
                             </div>
                         </div>
