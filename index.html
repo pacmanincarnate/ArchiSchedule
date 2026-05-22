@@ -218,27 +218,74 @@
         };
 
         const getUSFederalHolidaysForYear = (year) => {
-            const h = [];
-            const addHoliday = (m, d) => h.push(`${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
-            addHoliday(1, 1);
-            let dt = new Date(Date.UTC(year, 0, 1)); addHoliday(1, 1 + (8 - dt.getUTCDay()) % 7 + 14);
-            dt = new Date(Date.UTC(year, 1, 1)); addHoliday(2, 1 + (8 - dt.getUTCDay()) % 7 + 14);
-            dt = new Date(Date.UTC(year, 4, 31)); addHoliday(5, 31 - ((dt.getUTCDay() + 6) % 7));
-            addHoliday(6, 19);
-            addHoliday(7, 4);
-            dt = new Date(Date.UTC(year, 8, 1)); const labOff = (8 - dt.getUTCDay()) % 7; addHoliday(9, labOff === 0 ? 7 : labOff);
-            dt = new Date(Date.UTC(year, 9, 1)); addHoliday(10, 1 + (8 - dt.getUTCDay()) % 7 + 7);
-            addHoliday(11, 11);
-            dt = new Date(Date.UTC(year, 10, 1)); addHoliday(11, 1 + (11 - dt.getUTCDay()) % 7 + 21);
-            addHoliday(12, 25);
+            const h = {};
+            const addHoliday = (m, d, name) => {
+                const dateStr = `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                h[dateStr] = name;
+            };
+
+            addHoliday(1, 1, "New Year's Day");
+            
+            // MLK Day - Third Monday in January
+            let dt = new Date(Date.UTC(year, 0, 1));
+            let mlkDay = 1 + (8 - dt.getUTCDay()) % 7 + 14;
+            addHoliday(1, mlkDay, "Martin Luther King Jr. Day");
+
+            // Presidents' Day - Third Monday in February
+            dt = new Date(Date.UTC(year, 1, 1));
+            let prezDay = 1 + (8 - dt.getUTCDay()) % 7 + 14;
+            addHoliday(2, prezDay, "Presidents' Day");
+
+            // Memorial Day - Last Monday in May
+            dt = new Date(Date.UTC(year, 4, 31));
+            let memDay = 31 - ((dt.getUTCDay() + 6) % 7);
+            addHoliday(5, memDay, "Memorial Day");
+
+            addHoliday(6, 19, "Juneteenth");
+            addHoliday(7, 4, "Independence Day");
+
+            // Labor Day - First Monday in September
+            dt = new Date(Date.UTC(year, 8, 1));
+            const labOff = (8 - dt.getUTCDay()) % 7;
+            addHoliday(9, labOff === 0 ? 7 : labOff, "Labor Day");
+
+            // Columbus Day / Indigenous Peoples' Day - Second Monday in October
+            dt = new Date(Date.UTC(year, 9, 1));
+            let colDay = 1 + (8 - dt.getUTCDay()) % 7 + 7;
+            addHoliday(10, colDay, "Columbus Day");
+
+            addHoliday(11, 11, "Veterans Day");
+
+            // Thanksgiving - Fourth Thursday in November
+            dt = new Date(Date.UTC(year, 10, 1));
+            let thxDay = 1 + (11 - dt.getUTCDay()) % 7 + 21;
+            addHoliday(11, thxDay, "Thanksgiving Day");
+
+            addHoliday(12, 25, "Christmas Day");
+            
             return h;
         };
         const generateHolidays = () => {
-            let arr = [];
-            for (let y = 2020; y <= 2040; y++) arr.push(...getUSFederalHolidaysForYear(y));
-            return arr;
+            let obj = {};
+            for (let y = 2020; y <= 2040; y++) Object.assign(obj, getUSFederalHolidaysForYear(y));
+            return obj;
         };
-        const HOLIDAYS = generateHolidays();
+        const HOLIDAY_MAP = generateHolidays();
+        const HOLIDAYS = Object.keys(HOLIDAY_MAP);
+
+        const getHolidayName = (dateStr) => {
+            if (HOLIDAY_MAP[dateStr]) return HOLIDAY_MAP[dateStr];
+            const extra = window._activeHolidays || [];
+            for (let i = 0; i < extra.length; i++) {
+                const h = extra[i];
+                if (typeof h === 'string') {
+                    if (h === dateStr) return "Holiday";
+                } else if (h.start && h.end) {
+                    if (dateStr >= h.start && dateStr <= h.end) return h.name || "Holiday";
+                }
+            }
+            return "";
+        };
 
         const addDays = (dateStr, days) => {
             const d = parseDate(dateStr);
@@ -1455,25 +1502,57 @@
 
             const timelineBoundsStartStr = timelineBounds.start.toISOString().split('T')[0];
             const timelineBoundsEndStr = timelineBounds.end.toISOString().split('T')[0];
-            const totalDays = diffDays(timelineBoundsStartStr, timelineBoundsEndStr);
+            // totalDays is the COUNT of days in the range (inclusive)
+            const totalDays = diffDays(timelineBoundsStartStr, timelineBoundsEndStr) + 1;
 
             const timelineHeaders = useMemo(() => {
                 const headers = { months: [], weeks: [], days: [] };
                 let current = parseDate(timelineBoundsStartStr);
-                let currentMonth = current.getUTCMonth();
-                let monthStartDay = 0;
+                
+                let currentMonth = -1;
+                let monthStartIdx = 0;
+                let monthNameDate = null;
 
-                for (let i = 0; i <= totalDays; i++) {
-                    const d = parseDate(timelineBoundsStartStr);
-                    d.setUTCDate(d.getUTCDate() + i);
+                for (let i = 0; i < totalDays; i++) {
+                    const d = new Date(current);
+                    d.setUTCDate(current.getUTCDate() + i);
                     const dStr = d.toISOString().split('T')[0];
-                    headers.days.push({ offset: i, date: d, str: dStr, isWeekend: isWeekend(d), isHoliday: isHoliday(dStr) });
-                    if (d.getUTCDay() === 1 || i === 0) headers.weeks.push({ dayOffset: i, date: d });
+                    const holidayName = getHolidayName(dStr);
+                    
+                    headers.days.push({ 
+                        offset: i, 
+                        date: d, 
+                        str: dStr, 
+                        isWeekend: isWeekend(d), 
+                        isHoliday: !!holidayName, 
+                        holidayName 
+                    });
 
-                    if (d.getUTCMonth() !== currentMonth || i === totalDays) {
-                        headers.months.push({ name: d.toLocaleString('default', { month: 'long', year: 'numeric', timeZone: 'UTC' }), start: monthStartDay, width: i - monthStartDay });
-                        currentMonth = d.getUTCMonth();
-                        monthStartDay = i;
+                    if (d.getUTCDay() === 1 || i === 0) {
+                        headers.weeks.push({ dayOffset: i, date: d });
+                    }
+
+                    const m = d.getUTCMonth();
+                    if (m !== currentMonth) {
+                        if (currentMonth !== -1) {
+                            headers.months.push({
+                                name: monthNameDate.toLocaleString('default', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
+                                start: monthStartIdx,
+                                width: i - monthStartIdx
+                            });
+                        }
+                        currentMonth = m;
+                        monthStartIdx = i;
+                        monthNameDate = d;
+                    }
+
+                    // Push the final month at the end of the loop
+                    if (i === totalDays - 1) {
+                        headers.months.push({
+                            name: monthNameDate.toLocaleString('default', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
+                            start: monthStartIdx,
+                            width: totalDays - monthStartIdx
+                        });
                     }
                 }
                 return headers;
@@ -3093,13 +3172,13 @@
                                         <div id="pdf-left-inner" style={{ minWidth: tableInnerWidth }} className="w-full relative">
 
                                             {linkingState && linkingState.panel === 'left' && (
-                                                <svg className="absolute top-[64px] left-0 w-full h-[calc(100%-64px)] pointer-events-none z-50">
+                                                <svg className="absolute top-[88px] left-0 w-full h-[calc(100%-88px)] pointer-events-none z-50">
                                                     <path d={`M ${linkingState.startX},${linkingState.startY} C ${linkingState.startX + 50},${linkingState.startY} ${linkingState.currentX - 50},${linkingState.currentY} ${linkingState.currentX},${linkingState.currentY}`} stroke="#6366f1" strokeWidth="2" fill="none" strokeDasharray="4 4" />
                                                     <circle cx={linkingState.currentX} cy={linkingState.currentY} r="4" fill="#6366f1" />
                                                 </svg>
                                             )}
 
-                                            <svg className={`absolute top-[64px] left-0 w-full h-[calc(100%-64px)] z-40 overflow-visible link-svg-fade ${activeTaskId ? 'visible' : 'hidden'}`} style={{ pointerEvents: activeTaskId ? 'none' : 'none' }}>
+                                            <svg className={`absolute top-[88px] left-0 w-full h-[calc(100%-88px)] z-40 overflow-visible link-svg-fade ${activeTaskId ? 'visible' : 'hidden'}`} style={{ pointerEvents: activeTaskId ? 'none' : 'none' }}>
                                                 {tasks.map(task => {
                                                     const isTaskHovered = activeTaskId === task.id;
                                                     const hasHoveredDep = task.deps.includes(activeTaskId);
@@ -3129,7 +3208,7 @@
                                             </svg>
 
                                             {/* Grid Header */}
-                                            <div className="flex items-center h-[64px] bg-slate-50 dark:bg-slate-800/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider sticky top-0 z-30 shadow-sm">
+                                            <div className="flex items-center h-[88px] bg-slate-50 dark:bg-slate-800/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider sticky top-0 z-30 shadow-sm">
                                                 <div className="w-8 flex-shrink-0 flex items-center justify-center">
                                                     <input
                                                         type="checkbox"
@@ -3389,7 +3468,7 @@
                                                                                                     </button>
                                                                                                 )}
                                                                                                 {activeTaskId === task.id && (
-                                                                                                    <div className="absolute top-1/2 -translate-y-1/2 right-2 h-4 w-4 bg-white dark:bg-slate-800 border-2 border-indigo-500 rounded-full z-40 cursor-crosshair shadow-sm flex items-center justify-center transition-opacity" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const container = document.getElementById('pdf-left-panel').querySelector('.overflow-y-auto'); const rect = container.getBoundingClientRect(); const startX = e.clientX - rect.left + container.scrollLeft; const startY = (e.clientY - rect.top + container.scrollTop) - 64; setLinkingState({ sourceId: task.id, startX, startY, currentX: startX, currentY: startY, panel: 'left' }); }} title="Drag to link to another task">
+                                                                                                    <div className="absolute top-1/2 -translate-y-1/2 right-2 h-4 w-4 bg-white dark:bg-slate-800 border-2 border-indigo-500 rounded-full z-40 cursor-crosshair shadow-sm flex items-center justify-center transition-opacity" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const container = document.getElementById('pdf-left-panel').querySelector('.overflow-y-auto'); const rect = container.getBoundingClientRect(); const startX = e.clientX - rect.left + container.scrollLeft; const startY = (e.clientY - rect.top + container.scrollTop) - 88; setLinkingState({ sourceId: task.id, startX, startY, currentX: startX, currentY: startY, panel: 'left' }); }} title="Drag to link to another task">
                                                                                                         <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full"></div>
                                                                                                     </div>
                                                                                                 )}
@@ -3499,7 +3578,7 @@
                                                         </div>
                                                     ))}
                                                 </div>
-                                                <div className="h-8 relative bg-white dark:bg-slate-800 overflow-hidden">
+                                                <div className="h-8 relative bg-white dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700/50 overflow-hidden">
                                                     {timelineHeaders.weeks.map((w, i) => (
                                                         <div key={i} className="absolute top-0 bottom-0 text-[10px] font-semibold text-slate-500 dark:text-slate-400 px-1.5 border-l border-slate-300 dark:border-slate-600 flex items-center group" style={{ left: `${w.dayOffset * dayWidth}px`, width: `${7 * dayWidth}px` }}>
                                                             {dayWidth > 10 ? `${w.date.getUTCDate()} ${w.date.toLocaleString('default', { month: 'short', timeZone: 'UTC' })}` : ''}
@@ -3507,9 +3586,16 @@
                                                         </div>
                                                     ))}
                                                 </div>
+                                                <div className="h-6 relative bg-slate-50 dark:bg-slate-900/30 overflow-hidden">
+                                                    {timelineHeaders.days.map((d, i) => (
+                                                        <div key={i} className={`absolute top-0 bottom-0 border-l ${d.isHoliday ? 'bg-rose-100/40 dark:bg-rose-900/30' : ''} ${d.date.getUTCDay() === 1 ? 'border-slate-300 dark:border-slate-600' : 'border-slate-100 dark:border-slate-800/30'} flex items-center justify-center text-[9px] font-medium text-slate-400 dark:text-slate-500 transition-colors`} style={{ left: `${i * dayWidth}px`, width: `${dayWidth}px` }} title={d.holidayName || ''}>
+                                                            {dayWidth > 20 ? d.date.getUTCDate() : (d.isHoliday ? '•' : '')}
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
 
-                                            <div className="absolute top-16 left-0 right-0 bottom-0 pointer-events-none">
+                                            <div className="absolute top-[88px] left-0 right-0 bottom-0 pointer-events-none">
                                                 {timelineHeaders.days.map((d, i) => {
                                                     let bg = 'bg-transparent';
                                                     if (d.isHoliday) bg = 'bg-rose-50/60 dark:bg-rose-900/20';
@@ -3521,7 +3607,7 @@
                                                     else if (isStartOfWeek) borderClass = 'border-l border-slate-300 dark:border-slate-600';
                                                     return (
                                                         <div key={i} className={`absolute top-0 bottom-0 ${borderClass} ${bg}`} style={{ left: `${i * dayWidth}px`, width: `${dayWidth}px`, marginLeft: (isStartOfMonth && i !== 0) ? '-1px' : '0' }}>
-                                                            {dayWidth > 30 && <div className="text-[9px] text-slate-300 dark:text-slate-600 text-center mt-1 font-medium">{d.date.getUTCDate()}</div>}
+                                                            {/* Background vertical line/shade only - tooltips are in the header */}
                                                         </div>
                                                     )
                                                 })}
@@ -3532,13 +3618,13 @@
                                             </div>
 
                                             {linkingState && (
-                                                <svg className="absolute top-[64px] left-0 w-full h-[calc(100%-64px)] pointer-events-none z-50">
+                                                <svg className="absolute top-[88px] left-0 w-full h-[calc(100%-88px)] pointer-events-none z-50">
                                                     <path d={`M ${linkingState.startX},${linkingState.startY} C ${linkingState.startX + 50},${linkingState.startY} ${linkingState.currentX - 50},${linkingState.currentY} ${linkingState.currentX},${linkingState.currentY}`} stroke="#6366f1" strokeWidth="2" fill="none" strokeDasharray="4 4" />
                                                     <circle cx={linkingState.currentX} cy={linkingState.currentY} r="4" fill="#6366f1" />
                                                 </svg>
                                             )}
 
-                                            <svg className="absolute top-[64px] left-0 w-full h-[calc(100%-64px)] pointer-events-none z-10">
+                                            <svg className="absolute top-[88px] left-0 w-full h-[calc(100%-88px)] pointer-events-none z-10">
                                                 {tasks.map(task => task.deps.map(depId => {
                                                     const depCoords = taskCoordinates[depId];
                                                     const taskCoords = taskCoordinates[task.id];
