@@ -20,9 +20,17 @@
 
     <!-- Babel for in-browser JSX compilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script>
+        Babel.registerPreset('classic-react', {
+            presets: [
+                [Babel.availablePresets['env']],
+                [Babel.availablePresets['react'], { runtime: 'classic' }]
+            ]
+        });
+    </script>
 
     <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@0.399.0"></script>
+    <script src="https://unpkg.com/lucide@0.399.0/dist/umd/lucide.min.js"></script>
 
     <style>
         /* Custom Scrollbar for sleek UI */
@@ -136,7 +144,7 @@
 <body>
     <div id="root"></div>
 
-    <script type="text/babel">
+    <script type="text/babel" data-presets="classic-react">
         const { useState, useMemo, useEffect, useRef, useCallback } = React;
 
         // --- Icon Wrapper ---
